@@ -1,0 +1,4 @@
+[submodule "external/segagenesisrecomp"]
+	path = external/segagenesisrecomp
+	url = https://github.com/mstan/segagenesisrecomp.git
+	branch = master
