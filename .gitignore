@@ -1,0 +1,16 @@
+# Conteúdo da Sega — nunca versionar
+*.bin
+*.md
+!README.md
+!notes/*.md
+*.gen
+*.smd
+*.md.bak
+ga.asm
+ga.*.asm
+z80/
+roms/
+# Saídas de build e do recompilador
+build/
+generated/
+*.srm
