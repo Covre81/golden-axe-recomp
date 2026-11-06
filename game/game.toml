@@ -1,0 +1,28 @@
+# Golden Axe (World) (Rev A), cabeçalho REV01 — CRC32 665D7DF9, 524288 bytes. A ROM NÃO fica no repositório.
+# Endereços calculados a partir da desmontagem lory1990 (ga.asm) somando o tamanho
+# das instruções a partir dos rótulos loc_XXXX. RASCUNHO: conferir com a tabela de
+# vetores do dump real (offsets 0x00, 0x04, 0x70, 0x78) antes do primeiro build.
+
+[game]
+output_prefix = "golden_axe"
+jump_table_autodiscovery = true   # VBlank usa jsr loc_D62(pc,d0.w)
+
+[ram_layout]
+initial_ssp = 0x00FFFD00   # vetor 0 do ga.asm
+vbla_stack  = 0x00FFFD00
+intr_stack  = 0x00FFFD00
+
+[functions]
+extra = [
+    0x000ABE,  # EntryPoint (vetor 1)
+    0x000CF6,  # VBlank (IRQ6)
+    0x000CE6,  # HBlank (IRQ4): jmp ($FFC100)
+    0x000CF0,  # loc_CF0: único valor gravado em $FFC100 (ga.asm:690) — saída do HBlank
+    0x000200,  # ErrorTrap1
+    0x00020E,  # ErrorTrap2
+    0x000214, 0x00021A, 0x000220, 0x000226, 0x00022C,  # IRQHandler1,2,3,5,7 (laços vazios)
+    0x000232,  # ErrorTrap3
+]
+# ponytail: rotina copiada para RAM $FFF400 (loc_2BF0, ga.asm:3021) e chamada com
+# jsr $FFF400 não é semente estática — cai no interpretador. Ver o contador [INTERP].
+# As outras ~73 chamadas indiretas entram pelos dados de execução (dispatch_misses).
