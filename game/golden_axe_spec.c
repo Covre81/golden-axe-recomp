@@ -1,15 +1,473 @@
+/*
+ * goldenaxe_spec.c — instantiates the GameSpec for Golden Axe
+ * (Sega Genesis/Mega Drive, 1990, W REV01).
+ *
+ * Identity, recompiled trampolines, and a minimal frame-record packer.
+ * Addresses verified against goldenaxe/disassembly/ga.asm and the ROM
+ * vector table:
+ *
+ *   $04 -> $000ABE  EntryPoint (initial PC)
+ *   $70 -> $000CE6  HBlank (IRQ4)
+ *   $78 -> $000CF6  VBlank (IRQ6)
+ *   GameLoop        $000C76  (outer mode dispatcher + per-frame loop)
+ *
+ * Deliberately NULL/minimal for bring-up:
+ *   - save_resume_pc      — no per-mode loop tops mapped yet; falls back to
+ *                           resume_main_loop_pc (GameLoop). Map Title/Level/
+ *                           Duel loop tops from ga.lst later.
+ *   - call_periodic       — no PLC-style periodic hook wired (plc_pending=0).
+ *   - z80_step            — no Z80 static recompilation; superzazu
+ *                           interpreter path stays the default.
+ *
+ */
 #include "game_spec.h"
 #include "genesis_runtime.h"
 
-/* Endereços: ver game.toml (rascunho, conferir com o dump). */
+#include <stdint.h>
+#include <stddef.h>   /* NULL */
+#include <string.h>   /* memset */
+#include <stdio.h>    /* TEMP diagnostics banner */
+
+/* ---- 68K RAM shadow (defined in glue.c) ---- */
+extern uint8_t g_ram[0x10000];
+extern uint8_t g_rom[0x400000];
+
+/* ---- Recompiled entry trampolines ---- */
+/* Routed through recomp_call_addr so the tail-call trampoline frame
+ * is set up before the recompiled function runs. */
 static void ga_call_entry_point(void) { recomp_call_addr(0x000ABEu); }
-static void ga_call_vblank(void)      { recomp_call_addr(0x000CF6u); }
 static void ga_call_hblank(void)      { recomp_call_addr(0x000CE6u); }
 
+/* ---- Player1 scripted-state stale-velocity AND input-lockout fix ----
+ *
+ * Dispatch entries 13, 14, 16, 18, 19, 21, 22, 24, 26 (loc_79DE, loc_8162,
+ * loc_7DF4, loc_7E3A, loc_7E94, loc_80F2, loc_8116, loc_8648-family,
+ * loc_8238) are the "idle / walk-to-NPC-position / dialog-wait / scripted
+ * cutscene walk-in" family this investigation traced at length (see
+ * PROGRESS.md). None of them read joypad input -- only entry 0 (loc_6FE0)
+ * does.
+ *
+ * Two things this family can leave behind that entry 0 depends on being
+ * clean, and that only SOME of the family's many exit paths reset:
+ *
+ * 1. $2C(a0), the X-velocity register. Several members (e.g. loc_8238,
+ *    loc_7E94) write a SCRIPTED, non-player value here while active.
+ *    loc_B68C (the unconditional per-frame physics integrator) keeps
+ *    adding whatever is in $2C(a0) to X every frame regardless of
+ *    dispatch state -- a leftover nonzero value here alone produces
+ *    "auto-walks right with zero input."
+ *
+ * 2. Bit 5 of $3(a0), the terrain-height-transition hold flag (set by
+ *    loc_74E0, cleared by loc_750A as part of this same state family's
+ *    own normal operation -- see PROGRESS.md's very long terrain-check
+ *    investigation). loc_6FE0 (entry 0's own body) tests this bit FIRST,
+ *    before any of its jump/attack/directional-input branches:
+ *        btst #5, $3(a0)
+ *        bne.s loc_7028      ; skip ALL directional/jump/attack handling
+ *    If this bit is still set the instant control hands back to entry 0,
+ *    input is *completely* dead -- not just movement, but jump, attack,
+ *    and magic too, matching the exact symptom reported ("only pause
+ *    works"). This is a better fit for total lockout than (1) alone,
+ *    which would only explain movement being wrong.
+ *
+ * Both (1) and (2) stem from the SAME handoff: whichever of this family's
+ * exit paths actually runs, only some of them (e.g. loc_750A's own bit5
+ * clear, loc_7F38's $2C(a0) clear) reset either piece of state; the
+ * natural-timeout / other exits (e.g. loc_8238's loc_82D2) reset neither.
+ *
+ * Fix: rather than patch each individual missing clear() one at a time
+ * (risking missing others), detect ANY transition where the PREVIOUS
+ * frame's dispatch entry was one of this scripted family and the CURRENT
+ * frame's entry is 0 (real player control), and clear BOTH $2C(a0) and
+ * $3(a0) bit 5 there. Combat/movement states (running, jump, attacks,
+ * hit-reaction, etc.) are NOT in this set, so real player-driven momentum
+ * or an in-progress terrain hold from actual gameplay is never touched --
+ * only entries confirmed (via this doc's disasm reading) to never read
+ * input and only ever carry scripted, not player-intended, state. Scoped
+ * to Player1 ($FFFFD000) only -- the only address this investigation's
+ * live captures ever observed hitting these entries. */
+#define GA_P1_BASE    0x00FFD000u
+#define GA_P1_STATE42 (GA_P1_BASE + 0x42u)
+#define GA_P1_XVEL    (GA_P1_BASE + 0x2Cu)
+#define GA_P1_FLAGS3  (GA_P1_BASE + 0x3u)
+#define GA_FLAGS3_TERRAIN_HOLD_BIT 0x20u
+
+static int ga_is_scripted_noinput_entry(uint16_t state42)
+{
+    if (state42 == 0u) return 0;
+    int entry = ((state42 >> 8) & 0x7Fu) / 4;
+    switch (entry) {
+        case 13: case 14: case 16: case 18: case 19:
+        case 21: case 22: case 24: case 26:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* ---- Global "freeze non-cutscene objects" flag (bit 3 of $FFFFC104) ----
+ *
+ * loc_6DCC/loc_6EF0 (the shared per-object per-frame dispatcher every
+ * object -- Player1 included -- goes through before its own state-table
+ * jump ever runs) tests this bit right before dispatching:
+ *     btst #3, $FFFFC104.w
+ *     beq.s loc_6F3E          ; clear -> dispatch normally
+ *     move.b $42(a0), d0
+ *     andi.b #$7F, d0
+ *     cmpi.b #$3C, d0
+ *     beq.s loc_6F3E          ; set, but this object is in state $3C (entry
+ *                             ; 15, the "dialog box is up" exemption) -> ok
+ *     rts                     ; otherwise: return WITHOUT dispatching AT ALL
+ * When this bit is set, an object's entire per-frame update is skipped --
+ * not gated internally like $3(a0) bit 5, genuinely never runs. Confirmed
+ * via live capture: with this bug active, even $4C(a0) (unconditionally
+ * decremented every single frame the object's own code runs at all)
+ * stops changing entirely, and only resumes once an attacking enemy's
+ * own (unaffected -- separate object) code writes into Player1's struct
+ * directly. That fully explains "no movement, no jump, no attack, no
+ * magic, only pause works" -- every one of those is gated behind this
+ * same per-frame dispatch, not just the directional-input block.
+ *
+ * Only two places in the whole ROM touch this bit: `loc_7330` sets it
+ * (part of opening the dialog box / starting the scripted approach), and
+ * `loc_8DFC` clears it (part of closing the dialog box, reached from 12
+ * different internal branches of the dialog text-box state machine). If
+ * `loc_8DFC` isn't reached on every path that should close the dialog
+ * (plausible given the user's own observation that a second character
+ * choice can trigger the dialog opening a SECOND time, i.e. `loc_7330`
+ * running again), the flag is left set forever and every future frame
+ * silently no-ops for Player1.
+ *
+ * Fix: rather than try to catch the exact moment the flag gets stuck
+ * (the transition can happen on a frame after Player1 already reached
+ * entry 0, not necessarily coincident with any state42 change this spec
+ * hook can key off of), check EVERY frame: `state42 == 0` (Player1's own
+ * dispatch says it holds real, non-cutscene player control) combined
+ * with this flag still being set is never a legitimate combination --
+ * whenever entry 0 is genuinely reached, the flag must already be clear
+ * (or entry 0 wouldn't have been reachable in the first place, per the
+ * dispatcher logic above). So this check is a pure no-op in the normal
+ * case and only ever fires to correct the stuck-flag bug. Deliberately
+ * NOT scoped to "previous frame was the scripted family" like the
+ * $2C(a0)/bit5 fix above -- the flag can get set on a frame after entry 0
+ * was already reached, so a one-shot transition check would miss it. */
+#define GA_GLOBAL_FREEZE_FLAGS 0x00FFC104u
+#define GA_FREEZE_NONCUTSCENE_BIT 0x08u
+
+/* ---- Player1 "cutscene-retrigger" bit silently blocking entry-0 dispatch
+ * (bit 6 of $3(a0)) ----
+ *
+ * loc_6DCC (the very top of the shared per-object dispatcher, run before
+ * the loc_6F68 state-table jump) has a second gate beyond the freeze flag
+ * above:
+ *     bclr #1, $3(a0)
+ *     bne.w loc_6ED8            ; one-shot "start cutscene" trigger (spawn-time only)
+ *     btst #6, $3(a0)
+ *     beq.w loc_6EF0            ; bit6 clear -> normal dispatch, reaches loc_6F3E
+ *     bset #2, $2(a0)
+ *     bne.w loc_6EF0            ; bit2 of $2(a0) already set -> also normal dispatch
+ *     ... heavy "linked-NPC allow-list" logic, ends by overwriting $42(a0) ...
+ * Live dispatch-tracing this session (instrumenting recomp_dispatch_once
+ * directly, watching every tail-call address reached) found bit6 getting
+ * set during ordinary walking -- no dialog, no NPC nearby -- and once set,
+ * func_006FE0 (entry 0, the player-control state) *permanently* stops
+ * being tail-called every subsequent frame, even though $42(a0) itself
+ * keeps reading back as 0x0000 on every external check. This is because
+ * the "bset #2,$2(a0) / bne.w loc_6EF0" short-circuit apparently isn't
+ * sticking frame-to-frame here (bit2 doesn't stay set), so the heavy
+ * branch re-fires every frame, each time overwriting $42(a0) and forcing
+ * it back through a different (non-entry-0) code path before the object's
+ * own logic settles $42(a0) back to 0 by the time anything reads it --
+ * entry 0's own code (movement input, animation ticking, everything)
+ * simply never runs that frame. Confirmed via the exact same
+ * frame-by-frame trace: at the frame this bit turns on, func_006FE0 drops
+ * out of the dispatch trace entirely while the outer func_006DB0 dispatch
+ * keeps firing every frame as normal -- and confirmed the reverse too:
+ * forcibly clearing bits 5/6 of $3(a0) and bit 2 of $2(a0) on every
+ * dispatch restores func_006FE0 running every frame again.
+ *
+ * This is a different, independent symptom from the terrain-hold
+ * ($2C(a0)/bit5) and freeze-flag bugs above, but the same style of fix
+ * applies: whenever entry 0 is genuinely, currently active (state42==0),
+ * bit6 being set is never legitimate (entry 0's own dispatch wouldn't be
+ * reachable to observe state42==0 in the first place if the heavy branch
+ * had actually taken over that frame) -- so clearing it here is a pure
+ * no-op in the healthy case and only ever corrects the stuck/re-arming
+ * bit. Bit 2 of $2(a0) is cleared alongside it so the one-shot latch
+ * starts from a known state rather than possibly re-arming the same
+ * frame it's observed already-set. NOT yet root-caused *why* bit6 gets
+ * set here in the first place (no dialog/NPC trigger was present in the
+ * repro) -- this addresses the dispatch-blocking symptom, not the
+ * upstream cause. See PROGRESS.md for the walk-animation investigation
+ * this was found during. */
+#define GA_FLAGS3_CUTSCENE_RETRIGGER_BIT 0x40u
+#define GA_FLAGS2_ONESHOT_LATCH_BIT      0x04u
+
+static void ga_call_vblank(void)
+{
+    static uint16_t s_prev_p1_state42 = 0xFFFFu;  /* sentinel: no prior frame yet */
+
+    recomp_call_addr(0x000CF6u);
+
+    uint16_t cur = m68k_read16(GA_P1_STATE42);
+    if (ga_is_scripted_noinput_entry(s_prev_p1_state42) && cur == 0x0000u) {
+        m68k_write32(GA_P1_XVEL, 0u);
+        uint8_t flags3 = m68k_read8(GA_P1_FLAGS3);
+        if (flags3 & GA_FLAGS3_TERRAIN_HOLD_BIT)
+            m68k_write8(GA_P1_FLAGS3, (uint8_t)(flags3 & ~GA_FLAGS3_TERRAIN_HOLD_BIT));
+    }
+    s_prev_p1_state42 = cur;
+
+    if (cur == 0x0000u) {
+        uint8_t freeze = m68k_read8(GA_GLOBAL_FREEZE_FLAGS);
+        if (freeze & GA_FREEZE_NONCUTSCENE_BIT)
+            m68k_write8(GA_GLOBAL_FREEZE_FLAGS, (uint8_t)(freeze & ~GA_FREEZE_NONCUTSCENE_BIT));
+
+        uint8_t flags3 = m68k_read8(GA_P1_FLAGS3);
+        if (flags3 & GA_FLAGS3_CUTSCENE_RETRIGGER_BIT)
+            m68k_write8(GA_P1_FLAGS3, (uint8_t)(flags3 & ~GA_FLAGS3_CUTSCENE_RETRIGGER_BIT));
+
+        uint8_t flags2 = m68k_read8(GA_P1_BASE + 0x2u);
+        if (flags2 & GA_FLAGS2_ONESHOT_LATCH_BIT)
+            m68k_write8(GA_P1_BASE + 0x2u, (uint8_t)(flags2 & ~GA_FLAGS2_ONESHOT_LATCH_BIT));
+    }
+}
+
+/* ---- Frame-record packer ---- */
+
+/* WRAM offsets (low 16 bits of $FFxxxx), from ga.asm + golden-axe-7.wch. */
+#define GA_GAME_MODE   0xC172   /* word: mode | $80 transition flag   */
+#define GA_VINT_COUNT  0xC2AE   /* longword: +4 per VBlank            */
+#define GA_PLAYER_X    0xD01C   /* word (wch + ga.asm:1434)           */
+#define GA_PLAYER_Y    0xD018   /* word (wch + ga.asm:1433)           */
+#define GA_HEALTH      0xFE7E   /* byte (wch + ga.asm:1765,4919,5776) */
+#define GA_MAGIC       0xFE80   /* byte (wch + ga.asm:1782,5770)      */
+
+/* v1 layout of the 256-byte game_data tail. Bump GA_GAME_DATA_VERSION on
+ * any shape change so frame-ring consumers can detect stale captures. */
+#define GA_GAME_DATA_VERSION 1
+
+typedef struct {
+    uint16_t version;
+    uint16_t game_mode;      /* raw C172 word incl. transition bit */
+    uint32_t vint_count;     /* /4 = serviced VBlanks              */
+    uint16_t player_x;
+    uint16_t player_y;
+    uint8_t  health;
+    uint8_t  magic;
+} GoldenAxeGameData;
+
+static uint16_t ga_rd16(uint32_t off) {
+    return (uint16_t)(((uint16_t)g_ram[off] << 8) | g_ram[off + 1]);
+}
+
+static uint32_t ga_rd32(uint32_t off) {
+    return ((uint32_t)ga_rd16(off) << 16) | (uint32_t)ga_rd16(off + 2);
+}
+
+static void goldenaxe_fill_frame_record(uint8_t game_data[256]) {
+    GoldenAxeGameData *ga = (GoldenAxeGameData *)game_data;
+    memset(ga, 0, sizeof(*ga));
+    ga->version    = GA_GAME_DATA_VERSION;
+    ga->game_mode  = ga_rd16(GA_GAME_MODE);
+    ga->vint_count = ga_rd32(GA_VINT_COUNT);
+    ga->player_x   = ga_rd16(GA_PLAYER_X);
+    ga->player_y   = ga_rd16(GA_PLAYER_Y);
+    ga->health     = g_ram[GA_HEALTH];
+    ga->magic      = g_ram[GA_MAGIC];
+}
+
+/* ---- Dispatch override ---- */
+/*
+ * 1) Nemesis DMA primitive aliases (see long comment below).
+ *
+ * 2) Object-state trampoline table $BA72..$BC71 (ga.asm loc_BA72): the four
+ *    object dispatchers jump to ENTRIES (bra.w opcodes at base+4*k,
+ *    k = routine&$7F), but discovery emits the bra DESTINATIONS (handlers),
+ *    not the entries — so every state dispatch missed. Decode the entry's
+ *    bra.w from ROM bytes and call the true handler: target = entry + 2 +
+ *    disp16 (PC-relative to the extension word). Entries may chain through
+ *    further bra.w's (e.g. entry 31 -> loc_BA70 rts trampoline).
+ */
+static inline uint16_t ga_rom16(uint32_t off)
+{
+    return (uint16_t)(((uint16_t)g_rom[off] << 8) | g_rom[off + 1]);
+}
+
+#define GA_STATE_TABLE_LO 0x00BA72u
+#define GA_STATE_TABLE_HI 0x00BBFAu   /* table ends where real code begins */
+#define GA_MODE_TABLE_LO  0x000CA2u
+#define GA_MODE_TABLE_HI  0x000D0Au   /* 17 mode entries (ga.asm loc_CA2) */
+
+/* Decode a bra.w trampoline entry from ROM and return its true target.
+ * Entries may chain (bra -> bra); bounded follow. Returns false when the
+ * word at `addr` is not a bra.w (caller then falls through to the miss
+ * logger so the failure stays loud). */
+static int ga_bra_target(uint32_t addr, uint32_t *out_tgt)
+{
+    uint16_t op = ga_rom16(addr);
+    int guard = 0;
+    while ((op & 0xFF00u) == 0x6000u && guard++ < 8) {
+        int16_t disp = (int16_t)ga_rom16(addr + 2u);
+        uint32_t tgt = addr + 2u + (uint32_t)disp;
+        op = ga_rom16(tgt);
+        if (!((op & 0xFF00u) == 0x6000u)) { *out_tgt = tgt; return 1; }
+        addr = tgt;
+    }
+    *out_tgt = addr;
+    return ((op & 0xFF00u) != 0x6000u);
+}
+
+#define GA_ROM_SIZE 0x80000u   /* matches expected_rom_size below */
+
+static int ga_dispatch_override(uint32_t addr)
+{
+    uint32_t tgt;
+    /* Object-state table entries (kept as an explicit fast-path/comment
+     * anchor; folded into the general case below, which subsumes it). */
+    if (addr >= GA_STATE_TABLE_LO && addr < GA_STATE_TABLE_HI &&
+        ((addr - GA_STATE_TABLE_LO) % 4u) == 0u &&
+        ga_bra_target(addr, &tgt))
+    {
+        recomp_call_addr(tgt);
+        return 1;
+    }
+    /* Mode-table override ($CA2 range) REMOVED after it produced
+     * dispatch-recursion stack overflows: mode handlers re-enter dispatch
+     * before returning, so native trampolining here cannot terminate.
+     * Proper fix = emit loc_CA2's pc-indexed site as an in-function switch
+     * at codegen time (see glue.c interior-label notes). Until then the
+     * tier-3 floor carries these misses, exactly as it carried boot since
+     * the first bring-up. Excluded below too, for the same reason. */
+
+    /* General bra.w-trampoline miss handler. The $BA72 object-state table
+     * (above) turned out to be one instance of a WIDESPREAD idiom: many
+     * per-entity-type behavior/animation state machines dispatch through
+     * their OWN small `bra.w` jump table, indexed by a per-object state
+     * byte with `jmp table(pc,d0.w)` and no other static reference to the
+     * table or its entries anywhere in the ROM. Nothing statically jumps
+     * to these tables, so the disassembler classifies them (and the
+     * `bra.w` entries themselves) as data — e.g. ga.asm:9911-9913 flags
+     * `jmp loc_8C32(pc,d0.w)` "(Uncertain target!)" with the 6-entry
+     * table right after it dumped as "Unknown data". Every such miss was
+     * previously falling through to the tier-3 floor.
+     *
+     * A `bra.w` opcode ($60xx) at the EXACT missed address is unambiguous
+     * — real data doesn't reliably decode as one, and this only fires for
+     * addresses the game itself just computed a dispatch to. Handling it
+     * here (native call) instead of the floor fixes both correctness
+     * (floor decline on any unsupported opcode reachable from the target)
+     * and timing (native cycle costs vs the floor's PRM estimate) for
+     * every such table at once, without hand-registering each one.
+     *
+     * Excludes: the $CA2 mode table (recursion risk, see above) and the
+     * Nemesis DMA aliases (handled explicitly below by fixed address, not
+     * ROM-decoded). Bounds-checked against ROM size before reading. */
+    /* recomp_call_addr() below is a genuine nested native C call (unlike
+     * the tail-call trampoline it sets up internally, which loops flat) —
+     * each override that resolves this way adds a real C stack frame for
+     * as long as the resolved target's own execution is still running.
+     * The floor path this replaces never did that (m68k_interp_run_framed
+     * interprets flat, with no further C-level dispatch recursion), so
+     * blanket-enabling this for every miss address risked exactly what
+     * PRINCIPLES already flagged for the $CA2 mode table: something deep
+     * in boot recursed enough to overflow the native stack (silent crash,
+     * no watchdog/crash-report — confirmed empirically, not theoretical).
+     * Cap nesting and decline (falls through to the floor, same as
+     * before) past a depth no legitimate single-hop entity/animation
+     * state dispatch should ever reach. */
+    static int s_bra_override_depth = 0;
+    if (!(addr >= GA_MODE_TABLE_LO && addr < GA_MODE_TABLE_HI) &&
+        addr < (GA_ROM_SIZE - 4u) && (addr & 1u) == 0u &&
+        s_bra_override_depth < 8 &&
+        ga_bra_target(addr, &tgt))
+    {
+        s_bra_override_depth++;
+        recomp_call_addr(tgt);
+        s_bra_override_depth--;
+        return 1;
+    }
+
+    /* Nemesis DMA primitive aliases: loc_2BDE copies ROM $2BF0 (432 bytes)
+     * to WRAM $FFFFF400 once at boot; callers jsr $FFFFF400/$FFFFF410
+     * (= loc_2C00, +$10 sub-entry). `addr` here is the RAW value
+     * recomp_dispatch_once() receives -- unmasked, i.e. the CPU's real
+     * sign-extended 32-bit address for `jsr ($FFFFF400).w` absolute-short
+     * addressing (see code_generator.c's recomp_dispatch_once(), which
+     * calls dispatch_override(addr) before any `& 0xFFFFFFu` masking).
+     * Previously matched against the 24-bit-truncated $FFF400/$FFF410
+     * (missing the high byte's extra F), which never equals the real
+     * $FFFFF400/$FFFFF410 addr -- so this override silently never fired
+     * for either alias, and BOTH calls fell through to the tier-3 floor
+     * on every invocation, game-wide, since boot. Confirmed the live
+     * symptom this caused: loc_2EFE's `jsr $FFFFF400.w` (VDPUpdatePalette,
+     * see golden-axe-32x-edition-main/doc/palette.md) sends DynamicPalette
+     * ($FFC080) to CRAM through this exact alias, and floor-interpreting
+     * it instead of running loc_2BF0 natively left CRAM desynced from
+     * DynamicPalette after any palette-flash event (e.g. the "defeat the
+     * first enemies" GO! prompt rendering its sword+lettering sprite with
+     * a stale/purple palette line instead of the correct gold one) --
+     * verified live: forcing WRAM $FFFFC17C's dirty bit from a debug probe
+     * (bypassing this call chain entirely) snapped CRAM to match
+     * DynamicPalette immediately, and rdb tracing confirmed the game's own
+     * code was already writing correct data and setting that dirty bit at
+     * the right time, just never getting the flush it triggered. Copy is
+     * never patched afterwards, so the ROM master is semantically
+     * identical. */
+    switch (addr) {
+        case 0xFFFFF400u: recomp_call_addr(0x0002BF0u); return 1;
+        case 0xFFFFF410u: recomp_call_addr(0x0002C00u); return 1;
+        default:          return 0;
+    }
+}
+
+/* ---- The spec ---- */
+
 const GameSpec g_game_spec = {
-    .display_name = "Golden Axe", .short_name = "GA",
-    .expected_rom_crc32 = 0x665D7DF9u, .expected_rom_size = 0x80000u,
-    .tier3_floor_default = 1,
-    .call_entry_point = ga_call_entry_point,
-    .call_vblank = ga_call_vblank, .call_hblank = ga_call_hblank,
+    .display_name           = "Golden Axe",
+    .short_name             = "GoldenAxe",
+
+    /* "Golden Axe (W) (REV01) [!]" — computed from the local ROM file */
+    .expected_rom_crc32     = 0x665D7DF9u,
+    .expected_rom_size      = 0x80000u,
+
+    /* GA executes code the static pass cannot see:
+     *   - a DMA/VRAM-flush routine copied to WRAM $FFFFF400 and jsr'd from
+     *     VBlank every frame (ga.asm:762) — RAM code, no static func_ exists;
+     *   - register-indirect jmp dispatchers around $303A/$0CEE (the 7
+     *     unresolved-jumptable sites) and interior-label targets ($05A6,
+     *     $305E, $3074) in disasm-unvisited low ROM.
+     * Run the tier-3 miss fallback always-on like RKA: each miss executes
+     * correctly on the interpreter capsule and feeds floor_coverage.toml as
+     * [functions].extra leads for the next regen. */
+    /* Tier-3 miss fallback ON: boot depends on it. The mode-0 dispatch at
+     * frame ~46 ($C9E, inside the loc_CA2 mode table) only reaches its
+     * handler via the interpreter capsule; with floor off the game
+     * black-screens. Known cost: floor execution doesn't model VBlank-
+     * spanning cycle accounting (see glue.c floor_enabled notes). */
+    .tier3_floor_default    = 1,
+
+    .call_entry_point       = ga_call_entry_point,
+    .call_vblank            = ga_call_vblank,
+    .call_hblank            = ga_call_hblank,
+
+    /* GameLoop: reads the C170 mode mailbox, copies to C172, dispatches
+     * jsr loc_CA2(pc,d0.w) — both the stable resume point AND the outer
+     * mode dispatcher for this game. */
+    .resume_main_loop_pc    = 0x000C76u,
+    .save_resume_pc         = NULL,               /* map per-mode loop tops later */
+    .dispatch_main_loop_pc  = 0x000C76u,
+    .call_periodic          = NULL,
+
+    .on_frame_pre           = NULL,
+    .on_frame_post          = NULL,
+    .on_hblank              = NULL,
+
+    .dispatch_override      = ga_dispatch_override,
+
+    .fill_frame_record      = goldenaxe_fill_frame_record,
+    .frame_record_version   = GA_GAME_DATA_VERSION,
+
+    .commands               = NULL,               /* built-in read_ram covers bring-up probing */
+    .command_count          = 0,
 };
