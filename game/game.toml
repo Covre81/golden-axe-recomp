@@ -1,0 +1,291 @@
+# game.toml — Golden Axe (Sega Genesis/Mega Drive, 1990)
+# 68000, 512KB ROM, no SRAM, no mapper
+# CRC32 (W REV01): 0x665D7DF9   (computed from Golden Axe (W) (REV01))")
+# Product serial: GM 00054018-01  (header $0180)
+# Internal checksum: $C17B        (header $018E)
+# Region: JUE                     (header "SEGAJUE")
+#
+# Disassembly source: https://www.romhacking.net/documents/719/ (Lorenzo, AS-based,
+# Nemesis Active Disassembler origin). All addresses below were verified
+# against that listing AND the ROM vector table / opcode bytes directly.
+
+[game]
+output_prefix = "goldenaxe"
+# Without this, the first "GO!" of a level can show the wrong colours: VBlank's
+# palette flush lands in the middle of GO!'s palette writes.
+cycle_drift_correction = true
+
+# NOTE: vblank_yield_addr deliberately NOT set. loc_DA8 ($000DA8) is not a
+# plain wait loop: it WRITES the work-request byte (d0 -> $FFFFC183) before
+# polling, and the VBlank handler consumes that byte to pick its per-frame
+# work. The generic yield replacement drops the request store and forces
+# SR=0x2300, starving the VBlank handler (frozen animations, no sprite
+# loads, dead input — verified experimentally). The spin-poll executes as
+# compiled code with interrupts serviced by cycle accounting instead.
+# A correct custom yield needs a spec hook that preserves the request
+# store; see goldenaxe_spec.c notes.
+
+# TODO(bring-up): annotations CSV + discovery TOMLs land here once the
+# gen_disasm_* pipeline runs against the AS listing (see sonicthehedgehog2/
+# for the shape). Both keys are optional — the recompiler skips them when
+# absent, so first bring-up proceeds without them.
+# annotations    = "annotations_from_disasm.csv"
+# discovery_files = [
+#     "goldenaxe.disasm_labels.toml",
+#     "goldenaxe.disasm_jumptables.toml",
+# ]
+
+# ---------------------------------------------------------------------------
+# Per-game RAM layout — see runner/game_layout.h.
+#
+# Golden Axe RAM map notes (vs Sonic conventions):
+#   - Game state lives at $FFFFC000-$FFFFDxxx (NOT $FFFFF600 like Sonic).
+#   - Game_Mode analog is a WORD at $FFC172: GameLoop ($0C76) copies the
+#     new-mode mailbox at $FFC170 into it ($FFFF = no pending change),
+#     then dispatches via jsr loc_CA2(pc,d0.w) on (value & $7C). Bit 7 is
+#     set on transitions (ga.asm:1204) — same convention as Sonic 2's
+#     "high bit may set during transitions".
+#   - Vint counter $FFC2AE gets addq.l #4 (not #1) per serviced VBlank and
+#     is masked #$2FFFF — scaled x4 vs Sonic but still monotonic per frame.
+#   - No Sonic-style Vint_routine dispatch byte exists. The closest analog
+#     is the HBlank handler pointer at $FFC100 (movea.l (a0); jmp (a0),
+#     ga.asm:743-744). vint_routine_addr is telemetry-only in the runner,
+#     so pointing it there is harmless; revisit if a real routine index
+#     turns up.
+#   - The game itself services VBlank on its own stack with A7 near the
+#     reset SSP ($FFFD00): GameLoop does ori #$700,sr with interrupts on,
+#     so native push depth below $FFFD00 is proven safe by design.
+# ---------------------------------------------------------------------------
+[ram_layout]
+game_mode      = 0xFFC172   # mode word (bit7 = transition flag)
+vint_runcount  = 0xFFC2AE   # +4 per VBlank, masked #$2FFFF (ga.asm:752-753)
+vint_routine   = 0xFFC100   # HBlank dispatch pointer (closest analog)
+plc_pending    = 0x000000   # no PLC system observed
+initial_ssp    = 0xFFFD00   # reset vector $0 (ga.asm:21)
+vbla_stack     = 0xFFFD00   # reset SSP top — native VBlank depth already fits below it
+intr_stack     = 0xFFFD00
+player_object  = 0xFFD000   # slot base: ID byte @ D000 (ga.asm:2398,6562);
+                            # X=$D01C Y=$D018 (ga.asm:1433-34,7060 + .wch)
+# UNVERIFIED: every mode word observed written to $FFC170 (ga.asm writes of
+# 4/$18/$1C/$C/8/$14). Which values count as gameplay needs runtime polling
+# (read_ram C172 across title -> demo -> level). Trim this list then — it
+# currently only relaxes the ramdump-trigger gate.
+level_modes    = [0x04, 0x08, 0x0C, 0x14, 0x18, 0x1C]
+
+# Widescreen is the custom renderer in game/goldenaxe_video.c; its two
+# instruction hooks are the [[widescreen_site]] entries below.
+
+# ---------------------------------------------------------------------------
+# Interrupt vectors (from the ROM vector table — ground truth):
+#   $04 -> $000ABE  EntryPoint
+#   $70 -> $000CE6  HBlank (IRQ4)
+#   $78 -> $000CF6  VBlank (IRQ6)
+# These must be seeded explicitly: they are reached only through the vector
+# table, which static discovery does not walk.
+# TODO(bring-up): expect dispatch_misses.toml feedback to grow this list
+# (RAM-pointer dispatch, object handlers) — resolve via the disasm pipeline
+# per PRINCIPLES #13a/#16, never by blind hand-adding.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Object-state trampoline table (ga.asm loc_BA72): dispatchers compute
+# jmp/jsr loc_BA72(pc,d0.w), d0 = (routine_byte & $7F) << 2. The table holds
+# ~99 bra.w entries and ENDS AT $BBFA where real handler code begins
+# (loc_BBFA). Routine bytes >= 99 never occur legitimately — runtime
+# dispatches into $BBFA+$BCxx indicate corrupted object state (upstream bug),
+# NOT missing table entries. Do NOT widen the span past $BBFA.
+# ---------------------------------------------------------------------------
+[[jump_table]]
+start  = 0xBA72
+end    = 0xBBFA
+stride = 4
+format = "bra_w"
+
+[functions]
+extra = [
+    0x000ABE,   # EntryPoint — initial PC (vector $04)
+    0x00826C,   # Opening-dialog entry in player state $68: save-state resume point
+    0x000C76,   # GameLoop — save-state resume point; each mode keeps its
+                # initialized bit in RAM, so re-entry here is mid-mode
+    0x000CE6,   # HBlank (IRQ4) — vector $70
+    0x000CF6,   # VBlank (IRQ6) — vector $78
+
+    # Nemesis decompressor VRAM-write slot heads — dispatch targets of the
+    # jmp (a3) at $303A (ga.asm loc_2FC8/loc_2FDA family; A3 base loc_3054,
+    # stride $0A via adda.w #(loc_305E-loc_3054)). Each is an alternative
+    # entry into the shared decoder loop exiting through the common epilogue
+    # at $307E. Runtime-confirmed via interior-label misses at frames ~53+
+    # (art decompression runs from the Sega logo onward).
+    0x003054,   # loc_3054 — write d4 to VDP data, fixed addr
+    0x00305E,   # loc_305E — XOR pattern, write, fixed addr
+    0x00306A,   # loc_306A — write, auto-increment addr
+    0x003074,   # loc_3074 — XOR pattern, write, auto-increment addr
+
+    # Branch-trampoline island at low ROM (bsr/bra.s chain, byte-verified:
+    # 611E/6010/601A...). Missed at boot frames ~49; the tier-3 capsule
+    # executed it cleanly and self-reported coverage for both entries.
+    0x0005A6,   # trampoline island entry
+    0x0005C6,   # interior trampoline covered alongside $5A6
+
+    # ResetAnimationEx — the disasm classified $88C4-$88CE as "Unknown
+    # data" (ga.asm:9623), but it's genuine code: byte-decoded by hand as
+    # `clr.b $14(a0)` (4228 0014) then `move.b #1,$16(a0)` (117C 0001
+    # 0016) = exactly the 10 bytes spanned, immediately falling through
+    # into the already-discovered loc_88CE (UpdateAnimationEx). Matches
+    # the golden-axe-32x-edition-main reference project's documented
+    # entity-animation system (doc/entityanimation.md): "ResetAnimationEx
+    # ($88C4): Reset animation to the initial frame and call
+    # UpdateAnimationEx" — clr the frame index, force-expire the frame
+    # timer, fall through. Nothing in the static disasm ever jumps/calls
+    # here directly (only reachable via a runtime-computed dispatch), so
+    # it was never split out as its own function and every call fell
+    # through to the tier-3 floor instead of native code — a likely
+    # contributor to incorrect entity/character animation playback.
+    0x0088C4,   # ResetAnimationEx
+
+    # loc_B8C0 -- AllocateEntitySprites's ($B7F8) per-entity sprite-piece
+    # emitter, called via a completely ordinary `bsr.w loc_B8C0` at $B8A2
+    # (ga.asm:12900), from inside AllocateEntitySprites's own per-entity
+    # loop. Genuine, fully disassembled code (ga.asm:12910-12951; clean
+    # `rts` at $B928) -- not a computed-jump target, not misclassified
+    # data. Never auto-promoted because code_generator.c's scan_function
+    # only registers a plain BSR/JSR target once a runtime oracle has
+    # observed BOTH the call site and the target executing (see its
+    # `proven = game_config_runtime_observed(...)` gate); whatever
+    # coverage run originally seeded this game's function list predates
+    # the PEA/RTS tail-redirect fix for AllocateEntitySprites's own
+    # callers (see PROGRESS.md, "sprite-rendering root cause"), so
+    # AllocateEntitySprites never actually ran back then and loc_B8C0
+    # never got proof of execution. Confirmed via `dispatch_misses.toml`/
+    # stderr: every call now falls to `recomp_call_addr` -> the tier-3
+    # floor, repeatedly declined as "[FLOOR][UNSAFE] capsule exit_pc !=
+    # native loose-A7 return" with garbage exit_pc values (e.g.
+    # $3FFF7E, $DF01EE) -- real M68K return-stack corruption from
+    # floor-interpreting this instead of running it natively, and the
+    # likely direct cause of both residual sprite-piece corruption and a
+    # crash a few thousand frames into play.
+    0x00B8C0,   # AllocateEntitySprites per-entity sprite-piece emitter
+
+    # Nemesis DMA primitive aliases loc_2BF0/loc_2C00 (see
+    # goldenaxe_spec.c's ga_dispatch_override, which resolves the
+    # $FFFFF400/$FFFFF410 WRAM trampoline addresses to these two ROM
+    # targets). Structurally invisible to auto-discovery for the same
+    # reason as every other entry in this list reached only through a
+    # dynamic/indirect target: no static JSR/BSR anywhere in the ROM
+    # names either address literally -- the only reference is the
+    # runtime WRAM-copy alias goldenaxe_spec.c decodes by hand. Every
+    # call therefore falls to recomp_call_addr -> the tier-3 floor.
+    # loc_2C00 (the $FFFFF410 alias) ends in a VDP-DMA-completion
+    # busy-wait (ga.asm:3061-3065: `move.w (a5),d4 / btst #1,d4 /
+    # bne.s -`) that the floor interpreter's own spin-yield safety net
+    # (m68k_interp.c, tracks only the last TWO distinct PCs) can't
+    # recognize either, since this loop cycles through three distinct
+    # addresses (the move, the btst, and the bne). Confirmed via a
+    # frame-exact reverse-debug-ring capture (see PROGRESS.md,
+    # "ROOT CAUSE FOUND", 2026-08-27): called from loc_8238's (entry
+    # 26, the post-dialog scripted-walk-in state) own natural-timeout
+    # exit path, right before the instruction that hands control back
+    # to the player -- this specific stall is the direct cause of the
+    # long-standing "player never gains control after the dialog
+    # closes" bug. Registering both here makes them native, which lets
+    # the matching codegen fix (external/m68k-recomp-core's
+    # code_generator.c, 3-instruction move/btst/bne-self yield-insertion
+    # pattern, added the same session) actually apply -- the floor
+    # interpreter has no equivalent for this instruction shape.
+    0x002BF0,   # loc_2BF0 -- $FFFFF400 alias (no busy-wait; registered
+                # for consistency with its sibling below)
+    0x002C00,   # loc_2C00 -- $FFFFF410 alias; the actual stall site
+
+    # loc_139F4 -- the palette-flash/reveal-script runner called via a
+    # completely ordinary `bsr.w loc_139F4` at $013982 (ga.asm:21402),
+    # from inside loc_13950 (InstantiateMapEntities' per-slot activation
+    # path, itself only reached via the entity-load scroll-trigger
+    # mechanism at loc_138FE -- see ga_scroll_trigger_watch.py). Genuine,
+    # fully disassembled code (ga.asm:21388-21420; loops up to twice over
+    # `jsr (loc_2EBA).l` / `jsr (loc_2ED6).l` writing DynamicPalette
+    # chunks, then unconditionally `bset #0, $FFFFC17C.w`) -- not a
+    # computed-jump target, not misclassified data. Missed for the same
+    # structural reason as loc_B8C0 above: scan_function only promotes a
+    # plain BSR/JSR target once a runtime oracle has observed both the
+    # call site and the target executing, and whatever coverage run
+    # seeded this game's function list never exercised clearing a full
+    # enemy wave (the only way to reach loc_138FE's trigger). Originally
+    # added chasing the "defeat the first enemies -> GO! prompt renders
+    # its sword+lettering sprite purple instead of gold" bug; that bug's
+    # actual root cause turned out to be unrelated and lives in
+    # goldenaxe_spec.c's ga_dispatch_override (a hex-digit typo dropping
+    # every $FFFFF400/$FFFFF410 WRAM-vector call, including loc_2EFE's
+    # DynamicPalette-to-CRAM flush, to the floor interpreter -- see that
+    # file's comment for the full trace), so this entry didn't fix that
+    # symptom. Left in anyway: it's still a genuine, disasm-verified
+    # function-discovery gap in the same class as loc_B8C0, and promoting
+    # it to native code is a strict improvement independent of the bug
+    # that motivated finding it.
+    0x0139F4,   # loc_139F4 -- palette-flash/reveal-script runner
+
+    # loc_1D2C jump table (ga.asm:1914-1926) -- the 11 real handlers of the
+    # level-scripted event queue at loc_1CD2/loc_1D0E/loc_1D14 (a completely
+    # separate, second scroll-triggered script system alongside
+    # loc_138FE/loc_13950/loc_139F4 above -- this one drives $FFFFC22E's
+    # 4-slot command queue, dispatched via `jsr loc_1D2C(pc,d0.w)` at
+    # $001D1C). Confirmed via `GENESIS_WRITE_TRACE_ADDR` (new this session,
+    # see glue.c's `write_trace_check`) live-tracing every write to
+    # DynamicPalette's palette-line-1 bytes ($FFC0A0-$FFC0BF): the
+    # confirmed-correct one-shot gold load for the "defeat enemies -> GO!"
+    # prompt (`...0000 0088 00CC 0EEE` exactly matching the reference
+    # capture) is written from inside `func_002520` (the main-loop's
+    # per-frame state-machine tick, ga.asm:2549) at its `loc_273A` branch,
+    # itself gated on bit7 of $FFFFC2A2 -- and the ONLY setter of that bit
+    # is `loc_1D74` (ga.asm:1942, `ori.b #$81,$FFFFC2A2.w`), i.e. exactly
+    # this jump table's entry 4. Because `jsr loc_1D2C(pc,d0.w)` is a
+    # computed target, the code generator emits it as `recomp_call_addr()`
+    # (see `func_001D0E`'s generated C) rather than a direct
+    # `recomp_call_func()` call -- and per the same
+    # `scan_function`-never-proved-it gate as `loc_B8C0`/`loc_139F4` above,
+    # none of these 11 targets made it into the discovered-function table,
+    # so EVERY dispatch through this jump table (entry 4 included) falls to
+    # the tier-3 floor. This is believed to be the root cause of the
+    # remaining "GO! sprite shows the wrong/leftover color" bug after the
+    # `goldenaxe_spec.c` dispatch-override fix and the `loc_139F4` addition
+    # above (neither of which fixed it) -- not yet verified live as of
+    # writing this entry; see PROGRESS.md for the full trace and whatever
+    # this session's live test found. Registering the whole table (not just
+    # entry 4) since all 11 are equally genuine, disasm-confirmed,
+    # ordinary-looking handler bodies (ga.asm:1927-2149, no data markers)
+    # reached only through this one computed dispatch.
+    0x001D5C,   # loc_1D5C -- entry 6
+    0x001D60,   # loc_1D60 -- entry 7
+    0x001D64,   # loc_1D64 -- entry 8
+    0x001D74,   # loc_1D74 -- entry 4 (sets $FFFFC2A2 bit7 -- the GO! trigger)
+    0x001D8A,   # loc_1D8A -- entry 3
+    0x001DA8,   # loc_1DA8 -- entry 1
+    0x001E02,   # loc_1E02 -- entry 5
+    0x001E8C,   # loc_1E8C -- entry 2
+    0x001EC0,   # loc_1EC0 -- entry 9
+    0x001ECE,   # loc_1ECE -- entry 10
+    0x001F0E,   # loc_1F0E -- entry 11
+]
+
+# No blacklist yet — add entries only when boundary-split promotes data to
+# functions (verified against ga.lst), per sonicthehedgehog/game.toml usage.
+
+# Adaptive widescreen (game/goldenaxe_video.c).
+[[widescreen_site]]
+addr = 0x00B8BE  # rts of AllocateEntitySprites: SAT cache and entities are final
+kind = "game_hook"
+[[widescreen_site]]
+addr = 0x0139EA  # after a map entity's X, Y and facing are set at spawn
+kind = "game_hook"
+
+# Wait-loop yields (ga_instruction_hook in game/goldenaxe_spec.c).
+[[widescreen_site]]
+addr = 0x000DB4
+kind = "game_hook"
+[[widescreen_site]]
+addr = 0x00903C
+kind = "game_hook"
+[[widescreen_site]]
+addr = 0x002C4A
+kind = "game_hook"
+[[widescreen_site]]
+addr = 0x002CE4
+kind = "game_hook"

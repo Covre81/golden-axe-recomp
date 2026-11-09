@@ -1,0 +1,47 @@
+# Local working notes
+/PROGRESS.md
+
+# Build output
+build/
+build-*/
+
+# Local-dev engine override (see scripts/link-engine.*): a junction to the
+# shared workspace engine checkout. The COMMITTED engine reference is the
+# `segagenesisrecomp` submodule; engine-local, when present, wins in CMake.
+engine-local/
+
+# ROMs / dumps — never commit (canonical dump stays out of tree).
+# The USA ROM uses the .md Mega Drive extension; ignore it by name so
+# real *.md docs (DEVELOPMENT.md, README.md) are still tracked.
+*.bin
+*.gen
+*.smd
+/Rocket Knight Adventures (USA).md
+/Rocket Knight Adventures (E).bin
+
+# Runtime / debug artifacts
+*.srm
+*.wav
+*.png
+!/docs/images/*.png
+*.log
+run.err
+run.out
+settings.ini
+rka-video.ini
+*.ram
+*.vram
+rom.cfg
+debug.ini
+dispatch_misses.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Release packaging output
+release/*.zip
+build-release/
+release-stage/
+release-linux/
+rom-*.cfg

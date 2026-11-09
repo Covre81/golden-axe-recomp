@@ -1,0 +1,8 @@
+[submodule "segagenesisrecomp"]
+	path = segagenesisrecomp
+	url = https://github.com/01Garland01/segagenesisrecomp.git
+	branch = goldenaxe
+[submodule "recomp-ui"]
+	path = recomp-ui
+	url = https://github.com/mstan/recomp-ui.git
+	branch = master
