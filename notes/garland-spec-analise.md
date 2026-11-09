@@ -16,6 +16,8 @@ O toml registra `loc_2C00` como função nativa. Esse trecho termina num loop de
 
 Previsão `[INFERIDO]`: com o motor atual, `loc_2C00` vira código nativo que gira no loop do DMA sem ceder a vez. Isso trava a thread do jogo. Se acontecer, o conserto é estender o padrão no `code_generator.c` do submódulo (que é PolyForm Noncommercial, do mstan; vale mandar de volta como PR).
 
+**Atualização 2026-11-09:** o padrão de 3 instruções foi implementado no submódulo `external/segagenesisrecomp/external/m68k-recomp-core`, branch local `feat/dma-wait-yield` (commit `b4b1ca3`, ainda sem push nem PR). Teste sem ROM: `tests/test_dma_wait_yield.py` (falhava antes, passa depois). `[CONFIRMADO]` só o código gerado; **não** foi validado com o jogo rodando. O interpretador "floor" (`m68k_interp.c`) continua olhando só 2 PCs e não foi alterado.
+
 ## Causa raiz do bug de controle
 
 **O spec sozinho não prova a causa raiz.** O próprio comentário dele admite: "NOT yet root-caused why bit6 gets set". O que dá para afirmar:
