@@ -1,0 +1,44 @@
+# Testes sem ROM: compila o GenesisRecomp e roda tests/run_all.py.
+# Só dispara quando muda algo que os testes leem (Windows conta 2x na cota).
+name: tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "game/**"
+      - "tests/**"
+      - "segagenesisrecomp"
+      - ".gitmodules"
+      - ".github/workflows/tests.yml"
+  pull_request:
+    paths:
+      - "game/**"
+      - "tests/**"
+      - "segagenesisrecomp"
+      - ".gitmodules"
+      - ".github/workflows/tests.yml"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Só o que o recompilador precisa; o --recursive puxaria s1disasm etc.
+      - name: Submódulos do motor
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 segagenesisrecomp
+          git -C segagenesisrecomp submodule update --init --depth 1 external/m68k-recomp-core
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Testes
+        run: python tests/run_all.py
