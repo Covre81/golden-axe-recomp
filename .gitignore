@@ -41,3 +41,9 @@ build-release/
 release-stage/
 release-linux/
 rom-*.cfg
+
+# Conteúdo da Sega — nunca versionar (desmontagem e blocos Z80)
+ga.asm
+ga.*.asm
+z80/
+roms/
