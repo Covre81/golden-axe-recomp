@@ -469,8 +469,6 @@ const GameSpec g_game_spec = {
     .video                  = &goldenaxe_video,
     /* Fresh installs start in the original 4:3 view; a saved choice wins. */
     .video_default          = "off",
-    /* H32 screens fill the display, as on real hardware. */
-    .min_logical_width      = 320,
     .load_settings          = goldenaxe_load_settings,
     .mods                   = goldenaxe_mods,
     .netplay_config_image   = goldenaxe_config_image,
