@@ -1,0 +1,66 @@
+From b4b1ca3757c40064b6e3cde1bb881a54f7497f8a Mon Sep 17 00:00:00 2001
+From: Bruno Covre <156009041+Covre81@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 00:35:46 +0000
+Subject: [PATCH] feat(genesis): cede a vez no loop de espera move/btst/bne
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Estende o idioma "esperar flag limpa por IRQ" (tst.X mem; bne self) para
+a forma de 3 instruções, usada na espera de fim de DMA do VDP:
+
+    move.w (a5),d4 / btst #1,d4 / bne.s <o move>
+
+Só vale com origem em memória (An indireto, d16(An), absoluto), porque
+uma origem em registrador ou imediato não muda por IRQ. Sem o yield o
+loop nativo gira sem deixar o runner avançar o VDP.
+
+Teste sem ROM: tests/test_dma_wait_yield.py no repositório
+golden-axe-recomp (ROM sintética + recompilador).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ profiles/genesis/code_generator.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/profiles/genesis/code_generator.c b/profiles/genesis/code_generator.c
+index 0d3f4bf..14555eb 100644
+--- a/profiles/genesis/code_generator.c
++++ b/profiles/genesis/code_generator.c
+@@ -5088,6 +5088,33 @@ bool codegen_emit(const GenesisRom *rom, const FunctionList *funcs,
+                 }
+             }
+ 
++            /* Same idiom, 3-instruction form: the status word is copied to
++             * a data register and tested there, then the loop branches back
++             * to the load:
++             *       move.w (a5),d4      ; VDP status (memory source)
++             *       btst   #1,d4        ; DMA busy
++             *       bne.s  <this move>
++             * Golden Axe's VDP-DMA completion wait (loc_2C00/loc_2C4E tail)
++             * is this shape. Memory source only: a register source cannot
++             * be changed by an IRQ handler, so there is nothing to yield for. */
++            if (j + 2 < instrs.count && instr.mnemonic == MN_MOVE &&
++                (instr.dst_ea >> 3) == EA_Dn &&
++                ((instr.src_ea >> 3) == EA_An_IND ||
++                 (instr.src_ea >> 3) == EA_An_DISP ||
++                 instr.src_ea == ((EA_PCR << 3) | PCR_ABS_W) ||
++                 instr.src_ea == ((EA_PCR << 3) | PCR_ABS_L))) {
++                M68KInstr bt, br;
++                if (m68k_decode(rom, instrs.addrs[j + 1], &bt) &&
++                    bt.mnemonic == MN_BTST &&
++                    bt.src_ea == instr.dst_ea &&
++                    m68k_decode(rom, instrs.addrs[j + 2], &br) &&
++                    br.mnemonic == MN_Bcc &&
++                    br.has_target &&
++                    br.target_addr == pc) {
++                    g_yield_in_next_bne = true;
++                }
++            }
++
+             fprintf(f_func, "  /* $%06X */\n", pc);
+             if (s_reverse_debug)
+                 fprintf(f_func, "  rdb_on_insn(0x%06Xu);\n", pc);
+-- 
+2.54.0.windows.1
+
