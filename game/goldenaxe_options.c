@@ -43,7 +43,7 @@ static int package_get(void *ctx,int i,RecompLauncherCModPackage *out)
     int ok=s_base->package_get(s_base->ctx,i,out);
     if(ok && !strcmp(out->id,"custom-widescreen")) {
         out->option_count=2;
-        COPY(out->description,"Wider Golden Axe scenery and actors without stretching. On by default; disable for the original 4:3 view.");
+        COPY(out->description,"Wider Golden Axe scenery and actors without stretching. Off by default; enable to replace the original 4:3 view.");
     }
     return ok;
 }

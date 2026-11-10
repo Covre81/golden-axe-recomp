@@ -8,19 +8,12 @@ save-state browser.
 
 Version 1.0 is the first stable release.
 
-You must supply your own **Golden Axe (W)** ROM. The source
+You must supply your own **Golden Axe (W)(REV01)** ROM. The source
 and release packages do not include the game ROM.
 
 ## Controls, saves, and rewind
 
 Default game controls can be remapped in the launcher.
-
-| Action | Keyboard | Xbox / PlayStation controller |
-| --- | --- | --- |
-| Move | Arrow keys | D-pad or left stick |
-| Jump (Genesis B) | X | A / Cross |
-| Attack / charge rocket (Genesis A or C) | Z or C | B / Circle or X / Square |
-| Start / pause | Enter | Start / Options |
 
 | Tool | Keyboard | Controller |
 | --- | --- | --- |
@@ -75,23 +68,12 @@ graphics, audio, and execution. Code not yet covered by static recompilation
 runs through the runtime's 68000 interpreter fallback; coverage reports help
 bring more of those routines into the generated code.
 
-RKA's custom renderer reconstructs the wider scenery from the game's level
-layouts and live graphics data. The game-specific implementation and address
-notes are in [game/CUSTOM-VIDEO.md](game/CUSTOM-VIDEO.md). The launcher comes
+Golden Axe's custom renderer reconstructs the wider scenery from the game's level
+layouts and live graphics data. The launcher comes
 from [recomp-ui](https://github.com/mstan/recomp-ui), and the shared
 [rbengine](https://github.com/RetroPortingToolKit/rbengine) snapshot system supports rewind.
 
 ## License and acknowledgments
-
-For this project's code covered by the [PolyForm Noncommercial License](LICENSE.md),
-[PERMISSIONS.md](PERMISSIONS.md) grants standing permission for voluntary
-donations, sponsorships, and advertising revenue, including support for broader
-development initiatives. Payment must not buy access to the software, games
-built with it, or their updates, features, or game content, including early access.
-
-Matthew Stanley has authority from the relevant copyright holders to grant
-these permissions for the project's PolyForm-covered code. Third-party
-components and code explicitly licensed under other terms retain those terms.
 
 The port and framework use the
 [PolyForm Noncommercial 1.0.0 license](LICENSE.md). Third-party components

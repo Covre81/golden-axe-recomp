@@ -14,6 +14,8 @@ output_prefix = "goldenaxe"
 # Without this, the first "GO!" of a level can show the wrong colours: VBlank's
 # palette flush lands in the middle of GO!'s palette writes.
 cycle_drift_correction = true
+# Required: entity updates and player movement return through `pea (ABS).l`.
+pea_redirect = true
 
 # NOTE: vblank_yield_addr deliberately NOT set. loc_DA8 ($000DA8) is not a
 # plain wait loop: it WRITES the work-request byte (d0 -> $FFFFC183) before
@@ -153,7 +155,7 @@ extra = [
     # `proven = game_config_runtime_observed(...)` gate); whatever
     # coverage run originally seeded this game's function list predates
     # the PEA/RTS tail-redirect fix for AllocateEntitySprites's own
-    # callers (see PROGRESS.md, "sprite-rendering root cause"), so
+    # callers, so
     # AllocateEntitySprites never actually ran back then and loc_B8C0
     # never got proof of execution. Confirmed via `dispatch_misses.toml`/
     # stderr: every call now falls to `recomp_call_addr` -> the tier-3
@@ -165,23 +167,17 @@ extra = [
     # crash a few thousand frames into play.
     0x00B8C0,   # AllocateEntitySprites per-entity sprite-piece emitter
 
-    # Nemesis DMA primitive aliases loc_2BF0/loc_2C00 (see
-    # goldenaxe_spec.c's ga_dispatch_override, which resolves the
-    # $FFFFF400/$FFFFF410 WRAM trampoline addresses to these two ROM
-    # targets). Structurally invisible to auto-discovery for the same
-    # reason as every other entry in this list reached only through a
-    # dynamic/indirect target: no static JSR/BSR anywhere in the ROM
-    # names either address literally -- the only reference is the
-    # runtime WRAM-copy alias goldenaxe_spec.c decodes by hand. Every
-    # call therefore falls to recomp_call_addr -> the tier-3 floor.
+    # Nemesis DMA primitives loc_2BF0/loc_2C00, the ROM masters of the
+    # routines copied to WRAM $FFF400/$FFF410. No static JSR/BSR in the
+    # ROM names either address. Calls through the WRAM copies run from
+    # live RAM via recomp_dispatch_ram_stub, not through these entries.
     # loc_2C00 (the $FFFFF410 alias) ends in a VDP-DMA-completion
     # busy-wait (ga.asm:3061-3065: `move.w (a5),d4 / btst #1,d4 /
     # bne.s -`) that the floor interpreter's own spin-yield safety net
     # (m68k_interp.c, tracks only the last TWO distinct PCs) can't
     # recognize either, since this loop cycles through three distinct
     # addresses (the move, the btst, and the bne). Confirmed via a
-    # frame-exact reverse-debug-ring capture (see PROGRESS.md,
-    # "ROOT CAUSE FOUND", 2026-08-27): called from loc_8238's (entry
+    # frame-exact reverse-debug-ring capture: called from loc_8238's (entry
     # 26, the post-dialog scripted-walk-in state) own natural-timeout
     # exit path, right before the instruction that hands control back
     # to the player -- this specific stall is the direct cause of the
@@ -209,14 +205,9 @@ extra = [
     # call site and the target executing, and whatever coverage run
     # seeded this game's function list never exercised clearing a full
     # enemy wave (the only way to reach loc_138FE's trigger). Originally
-    # added chasing the "defeat the first enemies -> GO! prompt renders
-    # its sword+lettering sprite purple instead of gold" bug; that bug's
-    # actual root cause turned out to be unrelated and lives in
-    # goldenaxe_spec.c's ga_dispatch_override (a hex-digit typo dropping
-    # every $FFFFF400/$FFFFF410 WRAM-vector call, including loc_2EFE's
-    # DynamicPalette-to-CRAM flush, to the floor interpreter -- see that
-    # file's comment for the full trace), so this entry didn't fix that
-    # symptom. Left in anyway: it's still a genuine, disasm-verified
+    # added chasing the wrong-coloured GO! prompt, which this entry didn't
+    # fix (see cycle_drift_correction above).
+    # Left in anyway: it's still a genuine, disasm-verified
     # function-discovery gap in the same class as loc_B8C0, and promoting
     # it to native code is a strict improvement independent of the bug
     # that motivated finding it.
@@ -247,8 +238,7 @@ extra = [
     # remaining "GO! sprite shows the wrong/leftover color" bug after the
     # `goldenaxe_spec.c` dispatch-override fix and the `loc_139F4` addition
     # above (neither of which fixed it) -- not yet verified live as of
-    # writing this entry; see PROGRESS.md for the full trace and whatever
-    # this session's live test found. Registering the whole table (not just
+    # writing this entry. Registering the whole table (not just
     # entry 4) since all 11 are equally genuine, disasm-confirmed,
     # ordinary-looking handler bodies (ga.asm:1927-2149, no data markers)
     # reached only through this one computed dispatch.

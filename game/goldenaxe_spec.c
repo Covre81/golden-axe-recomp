@@ -3,7 +3,7 @@
  * (Sega Genesis/Mega Drive, 1990, W REV01).
  *
  * Identity, recompiled trampolines, and a minimal frame-record packer.
- * Addresses verified against goldenaxe/disassembly/ga.asm and the ROM
+ * Addresses verified against the disassembly and the ROM
  * vector table:
  *
  *   $04 -> $000ABE  EntryPoint (initial PC)
@@ -24,11 +24,11 @@
 #include "genesis_runtime.h"
 #include "goldenaxe_video.h"
 #include "goldenaxe_options.h"
+#include "video/genesis_machine.h"
 
 #include <stdint.h>
 #include <stddef.h>   /* NULL */
 #include <string.h>   /* memset */
-#include <stdio.h>    /* TEMP diagnostics banner */
 
 /* ---- 68K RAM shadow (defined in glue.c) ---- */
 extern uint8_t g_ram[0x10000];
@@ -38,15 +38,46 @@ extern uint8_t g_rom[0x400000];
 /* Routed through recomp_call_addr so the tail-call trampoline frame
  * is set up before the recompiled function runs. */
 static void ga_call_entry_point(void) { recomp_call_addr(0x000ABEu); }
-static void ga_call_hblank(void)      { recomp_call_addr(0x000CE6u); }
+
+/* The VDP's pending control-port command belongs to the interrupted code:
+ * the game can prime a command and take an interrupt before its data
+ * writes, and the handler's own VDP work would otherwise redirect them. */
+typedef struct {
+    uint8_t  control_pending, code, address_hi, dma_fill_pending;
+    uint16_t address;
+} GaVdpCommand;
+
+static GaVdpCommand ga_vdp_command_save(void)
+{
+    const GVDP *v = &g_machine.vdp;
+    GaVdpCommand s = { v->control_pending, v->code, v->address_hi,
+                       v->dma_fill_pending, v->address };
+    return s;
+}
+
+static void ga_vdp_command_restore(const GaVdpCommand *s)
+{
+    GVDP *v = &g_machine.vdp;
+    v->control_pending  = s->control_pending;
+    v->code             = s->code;
+    v->address_hi       = s->address_hi;
+    v->dma_fill_pending = s->dma_fill_pending;
+    v->address          = s->address;
+}
+
+static void ga_call_hblank(void)
+{
+    GaVdpCommand command = ga_vdp_command_save();
+    recomp_call_addr(0x000CE6u);
+    ga_vdp_command_restore(&command);
+}
 
 /* ---- Player1 scripted-state stale-velocity AND input-lockout fix ----
  *
  * Dispatch entries 13, 14, 16, 18, 19, 21, 22, 24, 26 (loc_79DE, loc_8162,
  * loc_7DF4, loc_7E3A, loc_7E94, loc_80F2, loc_8116, loc_8648-family,
  * loc_8238) are the "idle / walk-to-NPC-position / dialog-wait / scripted
- * cutscene walk-in" family this investigation traced at length (see
- * PROGRESS.md). None of them read joypad input -- only entry 0 (loc_6FE0)
+ * cutscene walk-in" family. None of them read joypad input -- only entry 0 (loc_6FE0)
  * does.
  *
  * Two things this family can leave behind that entry 0 depends on being
@@ -61,8 +92,7 @@ static void ga_call_hblank(void)      { recomp_call_addr(0x000CE6u); }
  *
  * 2. Bit 5 of $3(a0), the terrain-height-transition hold flag (set by
  *    loc_74E0, cleared by loc_750A as part of this same state family's
- *    own normal operation -- see PROGRESS.md's very long terrain-check
- *    investigation). loc_6FE0 (entry 0's own body) tests this bit FIRST,
+ *    own normal operation). loc_6FE0 (entry 0's own body) tests this bit FIRST,
  *    before any of its jump/attack/directional-input branches:
  *        btst #5, $3(a0)
  *        bne.s loc_7028      ; skip ALL directional/jump/attack handling
@@ -200,8 +230,7 @@ static int ga_is_scripted_noinput_entry(uint16_t state42)
  * frame it's observed already-set. NOT yet root-caused *why* bit6 gets
  * set here in the first place (no dialog/NPC trigger was present in the
  * repro) -- this addresses the dispatch-blocking symptom, not the
- * upstream cause. See PROGRESS.md for the walk-animation investigation
- * this was found during. */
+ * upstream cause. */
 #define GA_FLAGS3_CUTSCENE_RETRIGGER_BIT 0x40u
 #define GA_FLAGS2_ONESHOT_LATCH_BIT      0x04u
 
@@ -209,7 +238,9 @@ static void ga_call_vblank(void)
 {
     static uint16_t s_prev_p1_state42 = 0xFFFFu;  /* sentinel: no prior frame yet */
 
+    GaVdpCommand command = ga_vdp_command_save();
     recomp_call_addr(0x000CF6u);
+    ga_vdp_command_restore(&command);
 
     uint16_t cur = m68k_read16(GA_P1_STATE42);
     if (ga_is_scripted_noinput_entry(s_prev_p1_state42) && cur == 0x0000u) {
@@ -362,9 +393,8 @@ static int ga_dispatch_override(uint32_t addr)
      * and timing (native cycle costs vs the floor's PRM estimate) for
      * every such table at once, without hand-registering each one.
      *
-     * Excludes: the $CA2 mode table (recursion risk, see above) and the
-     * Nemesis DMA aliases (handled explicitly below by fixed address, not
-     * ROM-decoded). Bounds-checked against ROM size before reading. */
+     * Excludes: the $CA2 mode table (recursion risk, see above).
+     * Bounds-checked against ROM size before reading. */
     /* recomp_call_addr() below is a genuine nested native C call (unlike
      * the tail-call trampoline it sets up internally, which loops flat) —
      * each override that resolves this way adds a real C stack frame for
@@ -390,37 +420,9 @@ static int ga_dispatch_override(uint32_t addr)
         return 1;
     }
 
-    /* Nemesis DMA primitive aliases: loc_2BDE copies ROM $2BF0 (432 bytes)
-     * to WRAM $FFFFF400 once at boot; callers jsr $FFFFF400/$FFFFF410
-     * (= loc_2C00, +$10 sub-entry). `addr` here is the RAW value
-     * recomp_dispatch_once() receives -- unmasked, i.e. the CPU's real
-     * sign-extended 32-bit address for `jsr ($FFFFF400).w` absolute-short
-     * addressing (see code_generator.c's recomp_dispatch_once(), which
-     * calls dispatch_override(addr) before any `& 0xFFFFFFu` masking).
-     * Previously matched against the 24-bit-truncated $FFF400/$FFF410
-     * (missing the high byte's extra F), which never equals the real
-     * $FFFFF400/$FFFFF410 addr -- so this override silently never fired
-     * for either alias, and BOTH calls fell through to the tier-3 floor
-     * on every invocation, game-wide, since boot. Confirmed the live
-     * symptom this caused: loc_2EFE's `jsr $FFFFF400.w` (VDPUpdatePalette,
-     * see golden-axe-32x-edition-main/doc/palette.md) sends DynamicPalette
-     * ($FFC080) to CRAM through this exact alias, and floor-interpreting
-     * it instead of running loc_2BF0 natively left CRAM desynced from
-     * DynamicPalette after any palette-flash event (e.g. the "defeat the
-     * first enemies" GO! prompt rendering its sword+lettering sprite with
-     * a stale/purple palette line instead of the correct gold one) --
-     * verified live: forcing WRAM $FFFFC17C's dirty bit from a debug probe
-     * (bypassing this call chain entirely) snapped CRAM to match
-     * DynamicPalette immediately, and rdb tracing confirmed the game's own
-     * code was already writing correct data and setting that dirty bit at
-     * the right time, just never getting the flush it triggered. Copy is
-     * never patched afterwards, so the ROM master is semantically
-     * identical. */
-    switch (addr) {
-        case 0xFFFFF400u: recomp_call_addr(0x0002BF0u); return 1;
-        case 0xFFFFF410u: recomp_call_addr(0x0002C00u); return 1;
-        default:          return 0;
-    }
+    /* The WRAM copy of the Nemesis DMA routines ($FFF400/$FFF410) never
+     * reaches this function: recomp_dispatch_ram_stub() runs it first. */
+    return 0;
 }
 
 /* ---- Save-state resume ----
@@ -465,8 +467,10 @@ static const GameDebugCommand ga_commands[] = {
 
 const GameSpec g_game_spec = {
     .video                  = &goldenaxe_video,
-    /* Fresh installs start in Adaptive widescreen; a saved choice wins. */
-    .video_default          = "fit",
+    /* Fresh installs start in the original 4:3 view; a saved choice wins. */
+    .video_default          = "off",
+    /* H32 screens fill the display, as on real hardware. */
+    .min_logical_width      = 320,
     .load_settings          = goldenaxe_load_settings,
     .mods                   = goldenaxe_mods,
     .netplay_config_image   = goldenaxe_config_image,

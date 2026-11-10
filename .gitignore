@@ -11,13 +11,9 @@ build-*/
 engine-local/
 
 # ROMs / dumps — never commit (canonical dump stays out of tree).
-# The USA ROM uses the .md Mega Drive extension; ignore it by name so
-# real *.md docs (DEVELOPMENT.md, README.md) are still tracked.
 *.bin
 *.gen
 *.smd
-/Rocket Knight Adventures (USA).md
-/Rocket Knight Adventures (E).bin
 
 # Runtime / debug artifacts
 *.srm
@@ -28,7 +24,7 @@ engine-local/
 run.err
 run.out
 settings.ini
-rka-video.ini
+goldenaxe-video.ini
 *.ram
 *.vram
 rom.cfg
