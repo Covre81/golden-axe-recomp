@@ -1,5 +1,5 @@
-# Testes sem ROM: compila o GenesisRecomp e roda tests/run_all.py.
-# Só dispara quando muda algo que os testes leem (Windows conta 2x na cota).
+# Testes sem ROM: compila o GenesisRecomp, roda tests/test_*.py e a suíte
+# CTest do motor. Só dispara quando muda algo que os testes leem.
 name: tests
 
 on:
@@ -29,16 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Só o que o recompilador precisa; o --recursive puxaria s1disasm etc.
+      # Só o que recompilador e testes do motor usam; o --recursive puxaria s1disasm etc.
       - name: Submódulos do motor
         shell: bash
         run: |
           git submodule update --init --depth 1 segagenesisrecomp
-          git -C segagenesisrecomp submodule update --init --depth 1 external/m68k-recomp-core
+          git -C segagenesisrecomp submodule update --init --depth 1 \
+            external/m68k-recomp-core external/z80-recomp-core external/rbengine
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Testes
-        run: python tests/run_all.py
+        run: python tests/run_all.py --engine
