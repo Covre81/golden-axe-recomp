@@ -141,52 +141,32 @@ static int ga_is_scripted_noinput_entry(uint16_t state42)
 
 /* ---- Global "freeze non-cutscene objects" flag (bit 3 of $FFFFC104) ----
  *
- * loc_6DCC/loc_6EF0 (the shared per-object per-frame dispatcher every
- * object -- Player1 included -- goes through before its own state-table
- * jump ever runs) tests this bit right before dispatching:
- *     btst #3, $FFFFC104.w
- *     beq.s loc_6F3E          ; clear -> dispatch normally
- *     move.b $42(a0), d0
- *     andi.b #$7F, d0
- *     cmpi.b #$3C, d0
- *     beq.s loc_6F3E          ; set, but this object is in state $3C (entry
- *                             ; 15, the "dialog box is up" exemption) -> ok
- *     rts                     ; otherwise: return WITHOUT dispatching AT ALL
- * When this bit is set, an object's entire per-frame update is skipped --
- * not gated internally like $3(a0) bit 5, genuinely never runs. Confirmed
- * via live capture: with this bug active, even $4C(a0) (unconditionally
- * decremented every single frame the object's own code runs at all)
- * stops changing entirely, and only resumes once an attacking enemy's
- * own (unaffected -- separate object) code writes into Player1's struct
- * directly. That fully explains "no movement, no jump, no attack, no
- * magic, only pause works" -- every one of those is gated behind this
- * same per-frame dispatch, not just the directional-input block.
+ * Shared dispatcher (loc_6DCC/loc_6EF0 / loc_6F26): btst #3,$FFC104; if set,
+ * skip the object's whole per-frame update unless move.b $42(a0),d0;
+ * andi.b #$7F,d0; cmpi.b #$3C,d0 passes (magic spell state).
  *
- * Only two places in the whole ROM touch this bit: `loc_7330` sets it
- * (part of opening the dialog box / starting the scripted approach), and
- * `loc_8DFC` clears it (part of closing the dialog box, reached from 12
- * different internal branches of the dialog text-box state machine). If
- * `loc_8DFC` isn't reached on every path that should close the dialog
- * (plausible given the user's own observation that a second character
- * choice can trigger the dialog opening a SECOND time, i.e. `loc_7330`
- * running again), the flag is left set forever and every future frame
- * silently no-ops for Player1.
+ * loc_7330 sets bit 3 at magic start (state $3C); loc_8E60 / loc_8DFC clear
+ * it when the spell ends. BlastEm (2P, P2 casts magic): freeze lasts ~248
+ * frames and both enemies take damage. In 2P, P2 casting while P1 is in
+ * state 0 is legitimate -- bit 3 must stay set until the spell finishes.
  *
- * Fix: rather than try to catch the exact moment the flag gets stuck
- * (the transition can happen on a frame after Player1 already reached
- * entry 0, not necessarily coincident with any state42 change this spec
- * hook can key off of), check EVERY frame: `state42 == 0` (Player1's own
- * dispatch says it holds real, non-cutscene player control) combined
- * with this flag still being set is never a legitimate combination --
- * whenever entry 0 is genuinely reached, the flag must already be clear
- * (or entry 0 wouldn't have been reachable in the first place, per the
- * dispatcher logic above). So this check is a pure no-op in the normal
- * case and only ever fires to correct the stuck-flag bug. Deliberately
- * NOT scoped to "previous frame was the scripted family" like the
- * $2C(a0)/bit5 fix above -- the flag can get set on a frame after entry 0
- * was already reached, so a one-shot transition check would miss it. */
+ * Recomp hook: each VBlank, if Player1 state42==0 and bit 3 is still set,
+ * clear bit 3 (corrects a stuck flag after some scripted paths). Skip that
+ * clear while Player 2 is in magic state (active slot: $FFD080 bit 7, and
+ * ($FFD0C2&$7F)==$3C). Otherwise 2P P2 magic is cancelled after one frame. */
 #define GA_GLOBAL_FREEZE_FLAGS 0x00FFC104u
 #define GA_FREEZE_NONCUTSCENE_BIT 0x08u
+#define GA_P2_BASE    0x00FFD080u
+#define GA_P2_STATE42 (GA_P2_BASE + 0x42u)
+
+static int ga_p2_casting_magic(void)
+{
+    uint8_t id = m68k_read8(GA_P2_BASE);
+
+    if (!(id & 0x80u))
+        return 0;
+    return (m68k_read8(GA_P2_STATE42) & 0x7Fu) == 0x3Cu;
+}
 
 /* ---- Player1 "cutscene-retrigger" bit silently blocking entry-0 dispatch
  * (bit 6 of $3(a0)) ----
@@ -367,7 +347,7 @@ static void ga_call_vblank(void)
 
     if (cur == 0x0000u) {
         uint8_t freeze = m68k_read8(GA_GLOBAL_FREEZE_FLAGS);
-        if (freeze & GA_FREEZE_NONCUTSCENE_BIT)
+        if ((freeze & GA_FREEZE_NONCUTSCENE_BIT) && !ga_p2_casting_magic())
             m68k_write8(GA_GLOBAL_FREEZE_FLAGS, (uint8_t)(freeze & ~GA_FREEZE_NONCUTSCENE_BIT));
 
         /* $3 bit 6 / $2 bit 2 are no longer cleared here: bit 6 is the

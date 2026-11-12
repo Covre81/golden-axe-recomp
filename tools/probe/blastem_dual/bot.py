@@ -1,4 +1,4 @@
-"""Bot igual para BlastEm (GDB, quadro a quadro) e recomp (TCP). Uso:
+﻿"""Bot igual para BlastEm (GDB, quadro a quadro) e recomp (TCP). Uso:
 python bot.py blastem|recomp <exp> <out_dir> [snapshot.ram]
 exp: boot (chega no gameplay e salva RAM), pit (anda p/ direita matando inimigos), edge (fica na borda esquerda batendo)
 """
@@ -27,6 +27,14 @@ class Blast:
             a0 = int(s.g.send('p8'), 16)
             if (a0 & 0xFFFFFF) == 0xFFC176:
                 s.g.send('P0=%08x' % ((~mask) & 0xFF)); s.frame += 1; return
+    def step2(s, m1, m2):
+        """um quadro com P1=m1 e P2=m2: para na leitura do P1 ($FFC176) e logo depois na do P2 ($FFC178)"""
+        while True:
+            s.g.send('c')
+            a0 = int(s.g.send('p8'), 16) & 0xFFFFFF
+            if a0 == 0xFFC176: s.g.send('P0=%08x' % ((~m1) & 0xFF))
+            elif a0 == 0xFFC178:
+                s.g.send('P0=%08x' % ((~m2) & 0xFF)); s.frame += 1; return
     def rd(s, a, n):
         o = b''
         while n > 0:
@@ -140,6 +148,16 @@ def rec(tag, p, extra=''):
     lv = E.rd(0xFFFE7C, 4)
     L(tag, 'f', E.frame, 'x', p[0x1C:0x1E].hex(), 'y', p[0x18:0x1A].hex(), 'z', p[0x20:0x22].hex(), 'g24', p[0x24:0x26].hex(), 'st42', p[0x42:0x44].hex(), 'f3', '%02x' % p[3], 'lives', lv.hex(), extra)
 
+if exp == 'demo':
+    # demonstracao automatica desde o boot, sem entrada: registra jogador/inimigos (para achar onde a demo diverge)
+    t = 0
+    while t < 6000:
+        if t >= 3000 and t % 2 == 0:
+            r = E.rd(0xFFD000, 0x400)
+            en = ' '.join('%d:%02x,%s,%s,%02x' % (i, r[o] & 0x7F, r[o+0x1C:o+0x1E].hex(), r[o+0x42:o+0x44].hex(), r[o+0x64]) for i, o in ((i, 0x100 + i*0x80) for i in range(6)) if r[o] & 0x80)
+            L('r', t, 'st', E.rd(0xFFC172, 2).hex(), 'P1', r[0x1C:0x1E].hex(), r[0x18:0x1A].hex(), r[0x42:0x44].hex(), '|', en)
+        E.step(0); t += 1
+    L('end'); E.close(); sys.exit(0)
 if not boot(): E.close(); sys.exit(1)
 if exp == 'boot':
     snapshot(os.path.join(out, 'stage1_gameplay.ram')); E.close(); sys.exit(0)
@@ -153,7 +171,7 @@ if snap:
         for a in range(0, 0x10000, 0x400):
             if not (SKIP_LO <= 0xFF0000 + a < SKIP_HI): E.wr(0xFF0000 + a, ram[a:a+0x400])
     L('transplanted', snap, 'at', E.frame)
-    if exp not in ('replay', 'atk', 'pit2'):
+    if exp not in ('replay', 'atk', 'pit2', 'pit7', 'p2atk', 'p2mag'):
         for _ in range(30): E.step(0)
 f_start = E.frame; prev = None; deaths = 0; lastlv = None
 def compact(p):
@@ -181,6 +199,47 @@ if exp == 'pit2':
         p = E.rd(0xFFD000, 0x60); lv = E.rd(0xFFFE7C, 1); cam = E.rd(0xFFC20C, 6)
         L('r', t, 'x', p[0x1C:0x1E].hex(), 'y', p[0x18:0x1A].hex(), 'z', p[0x20:0x22].hex(), 'g24', p[0x24:0x26].hex(), 'st42', p[0x42:0x44].hex(), 'f3', '%02x' % p[3], 'lv', lv.hex(), 'cam', cam.hex())
         E.step(psched(t)); t += 1
+    L('end'); E.close(); sys.exit(0)
+if exp == 'pit7':
+    # fase 7: segura DIREITA desde o save do comeco da fase; vidas repostas a cada 60 quadros (igual ao mkpit7.py)
+    t = 0
+    while t < 1300:
+        p = E.rd(0xFFD000, 0x60); lv = E.rd(0xFFFE7C, 1); cam = E.rd(0xFFC20C, 6)
+        L('r', t, 'x', p[0x1C:0x1E].hex(), 'y', p[0x18:0x1A].hex(), 'z', p[0x20:0x22].hex(), 'g24', p[0x24:0x26].hex(), 'st42', p[0x42:0x44].hex(), 'f3', '%02x' % p[3], 'lv', lv.hex(), 'cam', cam.hex())
+        if t % 60 == 0: E.wr(0xFFFE7C, b'\x09')
+        E.step(RIGHT if t < 1100 else 0); t += 1
+    L('end'); E.close(); sys.exit(0)
+if exp == 'p2atk':
+    # 2 jogadores (save do recomp com P1 e P2 no primeiro encontro): P1 vai para a borda esquerda e fica parado (nunca aperta B);
+    # P2 bate (B 3 quadros a cada 12, toque p/ direita a cada 60). HP dos dois reposto a cada 60 quadros. Igual ao mkp2atk.py.
+    t = 0
+    while t < 1200:
+        r = E.rd(0xFFD000, 0x400); hp = E.rd(0xFFFE7C, 0x14)
+        def pl(o): return '%s,%s,%s,%02x' % (r[o+0x1C:o+0x1E].hex(), r[o+0x20:o+0x22].hex(), r[o+0x42:o+0x44].hex(), r[o+3])
+        en = ' '.join('%d:%02x,%s,%s,%s,%02x,%s' % (i, r[o] & 0x7F, r[o+0x1C:o+0x1E].hex(), r[o+0x20:o+0x22].hex(), r[o+0x42:o+0x44].hex(), r[o+0x64], r[o+0x38:o+0x3C].hex())
+                      for i, o in ((i, 0x100 + i*0x80) for i in range(6)) if r[o] & 0x80)
+        L('r', t, 'P1', pl(0), 'P2', pl(0x80), 'hp', hp[2:3].hex(), hp[0x12:0x13].hex(), '|', en)
+        if t % 60 == 0:
+            E.wr(0xFFFE7E, b'\x30'); E.wr(0xFFFE8E, b'\x30'); E.wr(0xFFFE7C, b'\x03'); E.wr(0xFFFE8C, b'\x03')
+        m1 = LEFT if t < 150 else 0
+        m2 = RIGHT if t < 30 else (0 if os.environ.get('P2_IDLE') else ((B if t % 12 < 3 else 0) | (RIGHT if t % 60 < 4 else 0)))
+        E.step2(m1, m2); t += 1
+    L('end'); E.close(); sys.exit(0)
+if exp == 'p2mag':
+    # 2 jogadores: P1 vai para a borda esquerda e fica parado (estado 0); P2 usa magia (A) em t=20. Igual ao mkp2mag.py.
+    # Olha $FFC104 bit 3 (congelamento da magia, loc_7330) e se P1/inimigos andam durante a magia do P2.
+    t = 0
+    while t < 600:
+        r = E.rd(0xFFD000, 0x400); c = E.rd(0xFFC104, 2); c1 = E.rd(0xFFC1C0, 2)
+        def pl(o): return '%s,%s,%s,%02x' % (r[o+0x1C:o+0x1E].hex(), r[o+0x20:o+0x22].hex(), r[o+0x42:o+0x44].hex(), r[o+3])
+        en = ' '.join('%d:%02x,%s,%s,%s,%02x' % (i, r[o] & 0x7F, r[o+0x1C:o+0x1E].hex(), r[o+0x20:o+0x22].hex(), r[o+0x42:o+0x44].hex(), r[o+0x64])
+                      for i, o in ((i, 0x100 + i*0x80) for i in range(6)) if r[o] & 0x80)
+        L('r', t, 'C104', c.hex(), 'C1C0', c1.hex(), 'P1', pl(0), 'P2', pl(0x80), '|', en, '| vb', E.rd(0xFFC17A, 2).hex())
+        if t in (0, 1): E.wr(0xFFFE90, b'\x03')   # t=1 tambem: no recomp a escrita do quadro do LOAD_STATE se perde
+        if t % 60 == 0: E.wr(0xFFFE7E, b'\x30'); E.wr(0xFFFE8E, b'\x30')
+        m1 = LEFT if t < 150 else 0
+        m2 = A if 20 <= t < 24 else 0
+        E.step2(m1, m2); t += 1
     L('end'); E.close(); sys.exit(0)
 if exp == 'atk':
     SHIFT = int(os.environ.get('ATK_SHIFT', '0'))
