@@ -1,0 +1,3 @@
+# usado com LOAD=: sem START (pausaria o jogo)
+WAIT 390000
+EXIT 0

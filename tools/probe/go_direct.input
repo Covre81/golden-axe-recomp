@@ -1,0 +1,38 @@
+# Laço GO!: espera o dialogo fechar (C104==0), dispara o evento pela RAM, captura.
+WAIT 400
+PRESS START 5
+WAIT 120
+PRESS START 5
+WAIT 120
+PRESS START 5
+WAIT 1650
+WAIT_RAM16 0xFFD042 0x0000
+WAIT 30
+DUMP_RAM C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_before.ram
+WRITE_RAM8 0xFFC2A2 0x81
+WRITE_RAM8 0xFFC200 0x01
+WAIT 1
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_01.png
+WAIT 1
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_02.png
+DUMP_RAM C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_02.ram
+WAIT 1
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_03.png
+WAIT 2
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_05.png
+WAIT 3
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_08.png
+WAIT 4
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_12.png
+DUMP_RAM C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_12.ram
+WAIT 8
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_20.png
+WAIT 10
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_30.png
+WAIT 15
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_45.png
+WAIT 15
+SCREENSHOT C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_60.png
+DUMP_RAM C:/Users/covre/AppData/Local/Temp/claude/71dec13997f65ab7/829e9c4a-4c1a-4004-90d6-1a2a29fd73ba/scratchpad/probe/go_60.ram
+WAIT 5
+EXIT 0

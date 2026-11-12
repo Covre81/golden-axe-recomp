@@ -1,0 +1,11 @@
+# wave multi: menus, espera controle; o resto e o driver TCP (wave_driver_multi.py)
+WAIT 400
+PRESS START 5
+WAIT 120
+PRESS START 5
+WAIT 120
+PRESS START 5
+WAIT 1650
+WAIT_RAM16 0xFFD042 0x0000
+WAIT 390000
+EXIT 0
