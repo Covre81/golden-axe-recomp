@@ -35,16 +35,6 @@ Experimental, not applied. Changes the NTSC audio frame length from 895780
 to 896040 master cycles (hardware 59.92 Hz). Test:
 `patches/test_segagenesisrecomp-ntsc-frame-audio.py`.
 
-## `proposal-boss-ai-watchdog.patch`
-
-Version 2, compiled and tested hidden, **not applied**. Optional AI watchdog
-for the stage 3 Bad Brothers, off by default (`boss_ai_watchdog=1` in
-`goldenaxe-video.ini`). Off: identical behaviour. On: a brother parked in
-state `$0C` or `$00` is moved to `$04`, and a brother whiffing forever is
-nudged toward the player. Not merged: the real cause of the endless
-swinging was the player hit-flag clear in `ga_call_vblank`, now removed (see
-"Already in the tree"). The watchdog was tested only before that fix.
-
 ## `proposal-launcher-amd-black.patch`
 
 Not applied. Compiles cleanly (checked 2026-11-12) but was never run: it
@@ -54,6 +44,14 @@ across a wide virtual desktop). Current workaround: `skip_launcher = 1` under
 `[launcher]` in `settings.ini`, or `--no-launcher`.
 
 ## Already in the tree
+
+Optional Bad Brothers AI watchdog (2026-11-12), **off by default**. Turn it on
+with a line `boss_ai_watchdog=1` in `goldenaxe-video.ini` next to the exe. A
+brother parked in AI state `$0C` (120 frames) or `$00` (180 frames) is moved
+to `$04`; a brother whiffing 6 times in a row is nudged 4 px toward the
+player. Only types `$C0`/`$C1` with anim script `$40262` are touched. Tested
+hidden with both stage 3 saves: off = identical numbers to the build without
+it; on = both brothers attack and hit the player every ~200 frames.
 
 Player hit-flag fix (2026-11-12): `ga_call_vblank` no longer clears player 1
 `$3` bit 6 / `$2` bit 2 while `$42 == 0`. That clear erased enemy hits

@@ -7,6 +7,8 @@ static char s_path[1024],s_error[160];
 /* Spawn range changes simulation, so it is in the shared session seal.
  * Adopting the host's value does not overwrite the local preference file. */
 static const char s_prefix[]="ga.spawn_range=";
+static int s_boss_ai_watchdog;
+int goldenaxe_boss_ai_watchdog_enabled(void){return s_boss_ai_watchdog;}
 void goldenaxe_config_image(char *out, size_t cap)
 {
     snprintf(out,cap,"%s%s",s_prefix,goldenaxe_video_spawn_mode());
@@ -23,12 +25,14 @@ void goldenaxe_load_settings(const char *path)
     char *sep=!a?b:!b?a:a>b?a:b;
     size_t offset=sep?(size_t)(sep+1-s_path):0;
     snprintf(s_path+offset,sizeof s_path-offset,"goldenaxe-video.ini");
+    s_boss_ai_watchdog=0;
     goldenaxe_video_set_spawn("expanded");
     FILE *f=fopen(s_path,"r");
     if (!f) return;
     char line[128],value[32];
     while(fgets(line,sizeof line,f))
         if(sscanf(line,"spawn_range=%31s",value)==1) goldenaxe_video_set_spawn(value);
+        else if(sscanf(line,"boss_ai_watchdog=%31s",value)==1) s_boss_ai_watchdog=(value[0]=='1'||value[0]=='y'||value[0]=='Y');
     fclose(f);
 }
 #if RECOMP_LAUNCHER

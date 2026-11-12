@@ -126,12 +126,16 @@ Testado escondido com os dois saves do Bruno (fase 3, jogador parado, 2.400–3.
 - Efeito para o Bruno: o jogo fica um pouco mais difícil, igual ao original. Ficar parado agora tira vida.
 - Continua sendo do jogo original [PROVÁVEL]: o irmão no estado `$0C` só sai quando é atacado, e o irmão no estado `$00` não se aproxima se o jogador está em outra "faixa" de profundidade (save 2).
 
-### Vigia opcional da IA (versão 2, não aplicada)
+### Vigia opcional da IA (entrou no código, DESLIGADO por padrão)
 
-- `patches/proposal-boss-ai-watchdog.patch` foi refeito: olha os 8 espaços de inimigo, aceita `$C0`/`$C1` com script `$40262`, e só escreve estados múltiplos de 4. Regras: `$0C` parado por 120 quadros → `$04`; `$00` parado por 180 quadros → `$04`; laço de golpe no ar → aproxima 4 px.
-- Desligado: comportamento igual ao exe sem patch, mesmos números nos dois saves [CONFIRMADO].
-- Ligado: o irmão do `$0C` sai em 119 quadros e o do `$00` passa a atacar [CONFIRMADO]. Mas os golpes continuam sem tirar vida, por causa da imunidade acima. Por isso **não entrou no código**.
-- Conferido no `ga.asm`: o tipo fica no byte `+$00` (bit 7 = ativo, `$C0` → `loc_10250`, `$C1` → `loc_1028A`), `+$1C` = X, `+$18` = Y, `+$20` = profundidade, `+$4C` = estado da IA (tabela `loc_102FE`, passos de 4) [CONFIRMADO].
+- Para ligar: criar/editar `goldenaxe-video.ini` ao lado do exe com a linha `boss_ai_watchdog=1`.
+- Regras: irmão parado no estado `$0C` por 120 quadros ou no `$00` por 180 quadros vai para o `$04` (atacar); se golpear o ar 6 vezes seguidas, chega 4 px mais perto. Só mexe nos tipos `$C0`/`$C1` com script `$40262` (os dois irmãos) [CONFIRMADO no `ga.asm`].
+- Testes escondidos, já com a correção do golpe [CONFIRMADO]:
+  - desligado: números iguais ao exe sem o vigia (save 1: 2 golpes no jogador; save 2: nenhum, irmãos parados);
+  - ligado: nos dois saves os dois irmãos atacam e acertam o jogador a cada ~200 quadros;
+  - save do primeiro quadro da fase 2 continua carregando.
+- Conferido no `ga.asm`: tipo no byte `+$00` (bit 7 = ativo, `$C0` → `loc_10250`, `$C1` → `loc_1028A`), `+$1C` = X, `+$18` = Y, `+$20` = profundidade, `+$4C` = estado da IA (tabela `loc_102FE`, passos de 4) [CONFIRMADO].
+- Não testado: partida inteira com o vigia ligado.
 
 ## 8. Tela preta do launcher (AMD)
 

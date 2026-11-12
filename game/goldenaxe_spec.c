@@ -235,6 +235,118 @@ static int ga_is_scripted_noinput_entry(uint16_t state42)
 #define GA_FLAGS3_CUTSCENE_RETRIGGER_BIT 0x40u
 #define GA_FLAGS2_ONESHOT_LATCH_BIT      0x04u
 
+/* ---- Optional Bad Brothers ($C0/$C1) AI watchdog, OFF by default ----
+ * Enable with "boss_ai_watchdog=1" in goldenaxe-video.ini.
+ * Mitigates original-ROM boss AI stalls (ga.asm); not a recompilation bug.
+ * Post-VBlank, for each of eight enemy slots at $FFD100+i*$80: only if ID is
+ * $C0/$C1 with anim script $00040262, then (1) loc_10782 "wait for contact":
+ * state $0C, $4E bit 6, no $03 bits 6/1 -- after 120 frames clear $4E bit 6 and
+ * set $4C=$04; (2) loc_1034C idle probe: state $00 with $4C bit 7 -- after 180
+ * frames set $4C=$04; (3) $04->$08 whiff loop -- after 6 entries into $08 with
+ * no $03 bit 6, if |P1 X - brother X|>16 nudge brother X 4 px toward P1.
+ * AI state bytes written to $4C are always multiples of 4 (ROM jump table). */
+#define GA_BB_SLOT_BASE     0x00FFD100u
+#define GA_BB_SLOT_STRIDE   0x80u
+#define GA_BB_SLOT_COUNT    8u
+#define GA_BB_ANIM_SCRIPT   0x00040262u
+#define GA_BB_WAIT_FRAMES   120u
+#define GA_BB_IDLE_FRAMES   180u
+#define GA_BB_ATK_STREAK    6u
+#define GA_BB_NUDGE_GAP     16u
+
+typedef struct {
+    uint16_t wait_contact;
+    uint16_t idle_probe;
+    uint8_t atk_streak;
+    uint8_t prev_st;
+} GaBbWd;
+
+static int ga_bb_is_brother(uint32_t b)
+{
+    uint8_t id = m68k_read8(b);
+    uint8_t kind = (uint8_t)(id & 0x7Fu);
+
+    if (kind != 0x40u && kind != 0x41u)
+        return 0;
+    if (!(id & 0x80u))
+        return 0;
+    return m68k_read32(b + 0x6Cu) == GA_BB_ANIM_SCRIPT;
+}
+
+static void ga_bb_watchdog_one(uint32_t b, GaBbWd *s)
+{
+    uint8_t st4c;
+    uint8_t st;
+    uint8_t f3;
+    uint8_t f4e;
+
+    if (!ga_bb_is_brother(b)) {
+        s->wait_contact = 0;
+        s->idle_probe = 0;
+        s->atk_streak = 0;
+        s->prev_st = 0xFFu;
+        return;
+    }
+    st4c = m68k_read8(b + 0x4Cu);
+    st = (uint8_t)(st4c & 0x7Fu);
+    f3 = m68k_read8(b + 0x03u);
+    f4e = m68k_read8(b + 0x4Eu);
+
+    if (st == 0x0Cu && (f4e & 0x40u) && !(f3 & 0x42u)) {
+        if (++s->wait_contact >= GA_BB_WAIT_FRAMES) {
+            m68k_write8(b + 0x4Eu, (uint8_t)(f4e & ~0x40u));
+            m68k_write8(b + 0x4Cu, 0x04u);
+            s->wait_contact = 0;
+        }
+    } else {
+        s->wait_contact = 0;
+    }
+
+    if (st == 0x00u && (st4c & 0x80u)) {
+        if (++s->idle_probe >= GA_BB_IDLE_FRAMES) {
+            m68k_write8(b + 0x4Cu, 0x04u);
+            s->idle_probe = 0;
+        }
+    } else {
+        s->idle_probe = 0;
+    }
+
+    if (st == 0x08u && s->prev_st != 0x08u) {
+        if (++s->atk_streak >= GA_BB_ATK_STREAK) {
+            uint16_t bx = m68k_read16(b + 0x1Cu);
+            uint16_t px = m68k_read16(0x00FFD01Cu);
+            int gap = (int)px - (int)bx;
+
+            if (gap < 0)
+                gap = -gap;
+            if ((unsigned)gap > GA_BB_NUDGE_GAP)
+                m68k_write16(b + 0x1Cu,
+                             (uint16_t)(px > bx ? bx + 4u : bx - 4u));
+            s->atk_streak = 0;
+        }
+    } else if ((f3 & 0x40u) || (st != 0x04u && st != 0x08u)) {
+        s->atk_streak = 0;
+    }
+    s->prev_st = st;
+}
+
+static void ga_bb_watchdog_tick(void)
+{
+    static GaBbWd wd[GA_BB_SLOT_COUNT];
+    static int wd_ready;
+    uint32_t i;
+
+    if (!goldenaxe_boss_ai_watchdog_enabled())
+        return;
+    if (!wd_ready) {
+        for (i = 0; i < GA_BB_SLOT_COUNT; i++)
+            wd[i].prev_st = 0xFFu;
+        wd_ready = 1;
+    }
+    for (i = 0; i < GA_BB_SLOT_COUNT; i++)
+        ga_bb_watchdog_one(GA_BB_SLOT_BASE + i * GA_BB_SLOT_STRIDE, &wd[i]);
+}
+
 static void ga_call_vblank(void)
 {
     static uint16_t s_prev_p1_state42 = 0xFFFFu;  /* sentinel: no prior frame yet */
@@ -262,6 +374,8 @@ static void ga_call_vblank(void)
          * clearing it every idle/walking frame made player 1 immune and left
          * enemies (e.g. the stage 3 Bad Brothers) swinging forever. */
     }
+
+    ga_bb_watchdog_tick();
 }
 
 /* ---- Frame-record packer ---- */
