@@ -1,6 +1,8 @@
 """Driver TCP v7 = v6 + modo --real-hp (vida e vidas de verdade, sem modo deus).
 Uso: python -I wave_driver_v7.py <exe_dir> <out_dir> <port> <timeout_s> [--real-hp] [flags do jogo] [LOAD=<save.bin>]
 --keep-lives: com --real-hp, HP de verdade mas vidas voltam a 9 (testa golpes/mortes sem game over por queda).
+--script=ARQ: usa outro script de entrada (ex.: tools/probe/two_player.input, P2 por script) e vigia o P2.
+--memlog=FAIXAS: troca as faixas do --mem-write-log (ex.: 0xFFD02C-0xFFD02F,0xFFD003).
 --shot-every=N: tira um print a cada N quadros em <saida>\shots (para medir cenas/dialogos).
 --save-delay=N: salva o stageN_start.bin N quadros depois do 1o quadro de gameplay da fase (padrao 0 = como no v6).
 Com --real-hp o driver NAO escreve $FFFE7C/$FFFE7E; registra cada perda de vida/HP (deaths) e game over.
@@ -13,15 +15,17 @@ import socket, subprocess, sys, time, json, os, shutil
 exe_dir, out, port, timeout = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
 REAL_HP = '--real-hp' in sys.argv[5:]
 KEEP_LIVES = '--keep-lives' in sys.argv[5:]  # com --real-hp: HP de verdade, mas vidas sempre 9 (o robo cai em buracos)
+SCRIPT = ([a.split('=',1)[1] for a in sys.argv[5:] if a.startswith('--script=')] or [None])[0]  # outro script de entrada (ex.: 2 jogadores)
+MEMLOG = ([a.split('=',1)[1] for a in sys.argv[5:] if a.startswith('--memlog=')] or ['0xFFC2A2-0xFFC2A5,0xFFC17C,0xFFC0B8-0xFFC0BF'])[0]  # faixas do --mem-write-log
 SHOT_EVERY = int(([a.split('=',1)[1] for a in sys.argv[5:] if a.startswith('--shot-every=')] or ['0'])[0])  # print a cada N quadros (0 = desligado)
 SAVE_DELAY = int(([a.split('=',1)[1] for a in sys.argv[5:] if a.startswith('--save-delay=')] or ['0'])[0])
-extra = [a for a in sys.argv[5:] if not a.startswith('LOAD=') and a not in ('--real-hp', '--keep-lives') and not a.startswith('--save-delay=') and not a.startswith('--shot-every=')]
+extra = [a for a in sys.argv[5:] if not a.startswith('LOAD=') and a not in ('--real-hp', '--keep-lives') and not a.startswith('--save-delay=') and not a.startswith('--shot-every=') and not a.startswith('--script=') and not a.startswith('--memlog=')]
 load = ([a[5:] for a in sys.argv[5:] if a.startswith('LOAD=')] or [None])[0]
 os.makedirs(out, exist_ok=True)
 here = os.path.dirname(os.path.abspath(__file__))
 args = [os.path.join(exe_dir, 'GoldenAxeRecomp.exe'), 'goldenaxe.bin', '--port', str(port),
-        '--max-frames', '400000', '--input-script', os.path.join(here, 'wave_load.input' if load else 'wave_full.input'),
-        '--mem-write-log', '0xFFC2A2-0xFFC2A5,0xFFC17C,0xFFC0B8-0xFFC0BF@400000'] + extra
+        '--max-frames', '400000', '--input-script', SCRIPT or os.path.join(here, 'wave_load.input' if load else 'wave_full.input'),
+        '--mem-write-log', MEMLOG + '@400000'] + extra
 proc = subprocess.Popen(args, cwd=exe_dir, stderr=open(os.path.join(out, 'run.err'), 'w'), stdout=subprocess.DEVNULL)
 log = open(os.path.join(out, 'driver.log'), 'w')
 def L(*a):
@@ -60,6 +64,7 @@ wx = [None, 0, 0, 0]; seen = {}; killed = {}; despawned = {}; last_px = None; px
 last_gameplay = 0; prev_a3 = 0; result = 'timeout'; last_stage = None; armed_logged = False
 stage_first = {}; last_lives = None; last_hp = None; deaths = 0; hp_hits = 0; min_hp = 999; max_stage = 0
 last_shot = [-1]
+p2w = [None, 0, 0, None]
 L('mode', 'REAL_HP' if REAL_HP else 'GOD')
 try:
     while time.time() - t0 < timeout:
@@ -87,6 +92,13 @@ try:
         if SHOT_EVERY and fr // SHOT_EVERY != last_shot[0]:
             last_shot[0] = fr // SHOT_EVERY; os.makedirs(os.path.join(out, 'shots'), exist_ok=True); cmd(cmd='screenshot', path=os.path.join(out, 'shots', 's_%06d.png' % fr))
         elif time.time() - same_fr_since > 15: result = 'HANG: frame stuck at %d' % fr; cmd(cmd='screenshot', path=os.path.join(out, 'hang_%06d.png' % fr)); break
+        if SCRIPT and state == 0x0C and tick % 20 == 0:
+            p2 = rd(0xFFD080, 0x48); p2on = bool(p2[0] & 0x80); p2pos = p2[0x1C:0x1E] + p2[0x18:0x1A]
+            if p2on and p2pos != p2w[0]: p2w[0] = p2pos; p2w[1] = fr
+            if p2on and fr - p2w[1] > 1800 and fr - p2w[2] > 1800:
+                p2w[2] = fr; L('P2 POSSIBLE FREEZE since', p2w[1], 'now', fr, 'stage', stage, 'st42', p2[0x42:0x44].hex(), 'f2f3', p2[2:4].hex()); cmd(cmd='screenshot', path=os.path.join(out, 'p2freeze_%06d.png' % fr))
+            if p2on != p2w[3]: L('P2 active' if p2on else 'P2 gone', 'at', fr, 'stage', stage); p2w[3] = p2on
+            if tick % 400 == 0: L('P2', 'on' if p2on else 'off', 'x', p2[0x1C:0x1E].hex(), 'y', p2[0x18:0x1A].hex(), 'st42', p2[0x42:0x44].hex(), 'f3', '%02x' % p2[3])
         if state == 0x0C and cur is None:
             px = rd(0xFFD000 + 0x1C, 2) + rd(0xFFD000 + 0x18, 2)
             if px != last_px: last_px = px; px_change = fr
