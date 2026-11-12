@@ -11,6 +11,7 @@ Não fazem parte do build. São ferramentas de teste, rodadas à mão.
 | `wave_full.input` | Script de entrada para começar do boot: passa os menus e espera o jogador ter controle. O resto é o driver. |
 | `wave_load.input` | Script de entrada para usar com `LOAD=`. Não aperta START, porque isso pausaria o jogo. |
 | `go_direct.input` | Teste antigo do GO! forçado pela RAM (`WRITE_RAM8 0xFFC2A2 0x81`). Os caminhos de saída dentro dele são absolutos (scratchpad da sessão antiga); troque antes de usar. |
+| `cmp_audio.py` | Compara o WAV do recomp com o som do BlastEm (atraso, afinação, timbre). Receita completa em `notes/fase1-som-2026-11-12.md`. Precisa de numpy. |
 | `check_go.py` | Diz se o "GO!" de um PNG está dourado (VERDE, sai 0) ou roxo (VERMELHO, sai 1). |
 
 Precisa de Python 3 com Pillow (`pip install pillow`).
@@ -44,6 +45,6 @@ Precisa de Python 3 com Pillow (`pip install pillow`).
 ## O que o driver faz na RAM
 
 - Modo deus: vidas `$FFFE7C = 9` e HP `$FFFE7E` no máximo a cada quadro de gameplay.
-- Inimigo comum: HP (`+$64`) = 0 e `+$42 = $401A`. Se não sumir em ~400 quadros, empurra para fora da tela (`+$18 = $0300`) e o próprio jogo o remove (`loc_B44A`).
+- Inimigo comum: HP (`+$64`) = 0 e empurra para fora da tela (`+$18 = $0300`); o próprio jogo o remove (`loc_B44A`). Repete a cada ~400 quadros se não sumir. Não escreve `$401A` em `+$42`: em entidades sem o estado `$40` isso faz o jogo saltar para o meio de uma instrução.
 - Chefe (ids `$3F $40 $41 $4A $4B $4C`): HP = 0 e `+$4C = $18`, o estado de morte do chefe (`$12080`), que desconta `C26C`.
 - Entidade que nasce com HP 0 (rei, princesa, objetos de cena): não mexe.
