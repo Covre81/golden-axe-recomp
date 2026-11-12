@@ -26,7 +26,9 @@ here = os.path.dirname(os.path.abspath(__file__))
 args = [os.path.join(exe_dir, 'GoldenAxeRecomp.exe'), 'goldenaxe.bin', '--port', str(port),
         '--max-frames', '400000', '--input-script', SCRIPT or os.path.join(here, 'wave_load.input' if load else 'wave_full.input'),
         '--mem-write-log', MEMLOG + '@400000'] + extra
-proc = subprocess.Popen(args, cwd=exe_dir, stderr=open(os.path.join(out, 'run.err'), 'w'), stdout=subprocess.DEVNULL)
+# Instancia de teste sempre oculta e muda: sem LNG_SCRIPT+LNG_TEST_HIDDEN o runner abre a janela na tela (main.c).
+env = dict(os.environ, LNG_SCRIPT='1', LNG_TEST_HIDDEN='1', SDL_AUDIODRIVER='dummy')
+proc = subprocess.Popen(args, cwd=exe_dir, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), stdin=subprocess.DEVNULL, stderr=open(os.path.join(out, 'run.err'), 'w'), stdout=subprocess.DEVNULL)
 log = open(os.path.join(out, 'driver.log'), 'w')
 def L(*a):
     log.write(' '.join(str(x) for x in a) + '\n'); log.flush()
