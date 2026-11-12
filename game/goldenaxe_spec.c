@@ -75,11 +75,12 @@ static void ga_call_hblank(void)
 
 /* ---- Player1 scripted-state stale-velocity AND input-lockout fix ----
  *
- * Dispatch entries 13, 14, 16, 18, 19, 21, 22, 24, 26 (loc_79DE, loc_8162,
- * loc_7DF4, loc_7E3A, loc_7E94, loc_80F2, loc_8116, loc_8648-family,
- * loc_8238) are the "idle / walk-to-NPC-position / dialog-wait / scripted
- * cutscene walk-in" family. None of them read joypad input -- only entry 0 (loc_6FE0)
- * does.
+ * Dispatch entries 14, 16, 18, 19, 21, 22, 24, 26 (loc_8162, loc_7DF4,
+ * loc_7E3A, loc_7E94, loc_80F2, loc_8116, loc_8648-family, loc_8238) are
+ * the "idle / walk-to-NPC-position / dialog-wait / scripted cutscene
+ * walk-in" family. Entry 13 (loc_79DE, dash attack) removed 2026-11-12
+ * because the ROM keeps its landing momentum on purpose. None of them read
+ * joypad input -- only entry 0 (loc_6FE0) does.
  *
  * Two things this family can leave behind that entry 0 depends on being
  * clean, and that only SOME of the family's many exit paths reset:
@@ -130,7 +131,7 @@ static int ga_is_scripted_noinput_entry(uint16_t state42)
     if (state42 == 0u) return 0;
     int entry = ((state42 >> 8) & 0x7Fu) / 4;
     switch (entry) {
-        case 13: case 14: case 16: case 18: case 19:
+        case 14: case 16: case 18: case 19:
         case 21: case 22: case 24: case 26:
             return 1;
         default:
