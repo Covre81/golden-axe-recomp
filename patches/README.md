@@ -37,17 +37,29 @@ to 896040 master cycles (hardware 59.92 Hz). Test:
 
 ## `proposal-boss-ai-watchdog.patch`
 
-Untested, not compiled, not applied. Optional AI watchdog for the stage 3
-Bad Brothers softlock, off by default (`boss_ai_watchdog=1` in
-`goldenaxe-video.ini`). Generated C matches `ga.asm`; this is likely original
-game behaviour.
+Version 2, compiled and tested hidden, **not applied**. Optional AI watchdog
+for the stage 3 Bad Brothers, off by default (`boss_ai_watchdog=1` in
+`goldenaxe-video.ini`). Off: identical behaviour. On: a brother parked in
+state `$0C` or `$00` is moved to `$04`, and a brother whiffing forever is
+nudged toward the player. Not merged because the swings still do no damage:
+see `proposal-player-hitflag.patch`.
+
+## `proposal-player-hitflag.patch`
+
+Not applied, needs a full playthrough test. `ga_call_vblank` clears player 1's
+`$3` bit 6 ("got hit", set by `loc_BFCC`) and `$2` bit 2 every frame while
+`$42 == 0`, so an idle or walking player takes no damage and some enemies loop
+their attack forever. This patch removes that clear. Test result: in the
+stage 3 save the first swing now hits (HP 32 -> 16) and the loop is gone.
+Risk: the old comment says the clear hid a lost-control bug.
 
 ## `proposal-launcher-amd-black.patch`
 
-Untested, not compiled, not applied. Attempt to fix the black launcher on
-AMD (HiDPI early-return in `apply_logical_display`, maximize across a wide
-virtual desktop). Current workaround: `skip_launcher = 1` under `[launcher]`
-in `settings.ini`, or `--no-launcher`.
+Not applied. Compiles cleanly (checked 2026-11-12) but was never run: it
+can only be verified by opening the launcher window. Attempt to fix the black
+launcher on AMD (HiDPI early-return in `apply_logical_display`, maximize
+across a wide virtual desktop). Current workaround: `skip_launcher = 1` under
+`[launcher]` in `settings.ini`, or `--no-launcher`.
 
 ## Already in the tree
 

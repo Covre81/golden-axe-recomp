@@ -101,16 +101,33 @@ O driver salvava `stageN_start.bin` no primeiro quadro de gameplay da fase. Da f
 - Ferramenta: `tools/probe/save_load_check.py`.
 - Limite: só o modo fase (`$0C`). Outros modos têm a mesma fraqueza na teoria; a solução geral seria no motor (adiar o save até o jogo voltar ao GameLoop) [INFERIDO].
 
-## 7. Chefes travados na fase 3 (Bad Brothers)
+## 7. Chefes travados na fase 3 (Bad Brothers) — atualizado à tarde
 
-- Softlock dos dois irmãos na fase 3. O C gerado bate com o `ga.asm` [CONFIRMADO]: `func_01073C` em `part17.c:5797`; `func_00BF48`/`func_00BF4A` em `part29.c:4`, contra `ga.asm` linhas 19001-19027 e 13393-13405.
-- É quase certamente comportamento do jogo original de 1989 [PROVÁVEL].
-- `loc_10782` espera o bit 6 de `$4E` e só segue quando o bit 6 de `$03` é ligado por `loc_C048`, no contato com o jogador.
-- Proposta opcional de watchdog (desligada por padrão, não compilada, não aplicada): `patches/proposal-boss-ai-watchdog.patch`.
+Testado escondido com os dois saves do Bruno (fase 3, jogador parado, 2.400–3.600 quadros). Provas em `C:\Users\covre\ga_savefix_evidence\boss\`.
+
+- Save 1: um irmão (`$FFD180`) fica no estado `$0C` esperando ser tocado; o outro (`$FFD100`) fica no laço `$04`→`$08`→`$04` (golpeia o ar a cada 30 quadros) [CONFIRMADO].
+- Save 2: `$FFD180` igual (estado `$0C`); `$FFD100` fica no estado `$00` parado, porque o jogador está 38 px longe na "profundidade" (`+$20`) [CONFIRMADO].
+- O irmão do estado `$0C` só sai quando o jogador bate nele (`loc_10782`). Isso bate com o que o Bruno viu ("só destravou depois que eu ataquei") e é do jogo original [PROVÁVEL].
+
+### Descoberta nova: o jogador fica imune a golpes quando está parado ou andando [CONFIRMADO]
+
+- Com o vigia ligado, os irmãos chegam perto e o golpe acerta: o jogo marca o bit 6 de `$FFD003` ("levei golpe", `loc_BFCC`). Mas o jogador nunca perde vida.
+- O log de escrita de memória mostra quem apaga esse bit: o código do próprio port, em `ga_call_vblank` (`game/goldenaxe_spec.c`, a correção antiga `GA_FLAGS3_CUTSCENE_RETRIGGER_BIT`). Ela apaga o bit 6 de `$3` e o bit 2 de `$2` do jogador em todo quadro em que o estado `$42` do jogador é 0 (parado/andando).
+- Esse código veio no projeto original (commit `fd8b7f7`). O comentário dele diz que o bit "aparecia andando, sem NPC por perto" e travava o controle. Muito provavelmente eram golpes de inimigos [PROVÁVEL].
+- Teste: com esse apagamento desligado (só no exe de teste), o primeiro golpe do irmão no save 1 acerta (vida 32→16) e o laço de "golpear o ar" some [CONFIRMADO].
+- Efeito no jogo: o jogador parado ou andando não leva dano, e a IA de alguns inimigos fica repetindo o ataque. Isso explica pelo menos um dos dois chefes travados [PROVÁVEL].
+- Ainda não mexi no código: tirar essa correção pode trazer de volta o travamento de controle que ela escondia. Falta uma partida inteira de teste. Proposta: `patches/proposal-player-hitflag.patch`.
+
+### Vigia opcional da IA (versão 2, não aplicada)
+
+- `patches/proposal-boss-ai-watchdog.patch` foi refeito: olha os 8 espaços de inimigo, aceita `$C0`/`$C1` com script `$40262`, e só escreve estados múltiplos de 4. Regras: `$0C` parado por 120 quadros → `$04`; `$00` parado por 180 quadros → `$04`; laço de golpe no ar → aproxima 4 px.
+- Desligado: comportamento igual ao exe sem patch, mesmos números nos dois saves [CONFIRMADO].
+- Ligado: o irmão do `$0C` sai em 119 quadros e o do `$00` passa a atacar [CONFIRMADO]. Mas os golpes continuam sem tirar vida, por causa da imunidade acima. Por isso **não entrou no código**.
+- Conferido no `ga.asm`: o tipo fica no byte `+$00` (bit 7 = ativo, `$C0` → `loc_10250`, `$C1` → `loc_1028A`), `+$1C` = X, `+$18` = Y, `+$20` = profundidade, `+$4C` = estado da IA (tabela `loc_102FE`, passos de 4) [CONFIRMADO].
 
 ## 8. Tela preta do launcher (AMD)
 
 - O fundo do menu é `#0A0D16`, quase preto [CONFIRMADO].
 - Causa mais provável: retorno cedo da escala HiDPI em `apply_logical_display` (`launcher_imgui.cpp:271`), ou a janela maximizada no desktop de 2987x724 [PROVÁVEL].
 - Contorno atual: `skip_launcher = 1` em `settings.ini` na seção `[launcher]`, ou abrir com `--no-launcher`.
-- Proposta (não compilada, não aplicada): `patches/proposal-launcher-amd-black.patch`.
+- Proposta (não aplicada): `patches/proposal-launcher-amd-black.patch`. Em 12/11 à tarde ela foi aplicada só para compilar e **compila sem erro** [CONFIRMADO]; depois foi desfeita. Não dá para testar sem abrir a janela na tela do Bruno, então continua só como patch.
