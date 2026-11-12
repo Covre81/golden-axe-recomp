@@ -41,17 +41,9 @@ Version 2, compiled and tested hidden, **not applied**. Optional AI watchdog
 for the stage 3 Bad Brothers, off by default (`boss_ai_watchdog=1` in
 `goldenaxe-video.ini`). Off: identical behaviour. On: a brother parked in
 state `$0C` or `$00` is moved to `$04`, and a brother whiffing forever is
-nudged toward the player. Not merged because the swings still do no damage:
-see `proposal-player-hitflag.patch`.
-
-## `proposal-player-hitflag.patch`
-
-Not applied, needs a full playthrough test. `ga_call_vblank` clears player 1's
-`$3` bit 6 ("got hit", set by `loc_BFCC`) and `$2` bit 2 every frame while
-`$42 == 0`, so an idle or walking player takes no damage and some enemies loop
-their attack forever. This patch removes that clear. Test result: in the
-stage 3 save the first swing now hits (HP 32 -> 16) and the loop is gone.
-Risk: the old comment says the clear hid a lost-control bug.
+nudged toward the player. Not merged: the real cause of the endless
+swinging was the player hit-flag clear in `ga_call_vblank`, now removed (see
+"Already in the tree"). The watchdog was tested only before that fix.
 
 ## `proposal-launcher-amd-black.patch`
 
@@ -62,6 +54,14 @@ across a wide virtual desktop). Current workaround: `skip_launcher = 1` under
 `[launcher]` in `settings.ini`, or `--no-launcher`.
 
 ## Already in the tree
+
+Player hit-flag fix (2026-11-12): `ga_call_vblank` no longer clears player 1
+`$3` bit 6 / `$2` bit 2 while `$42 == 0`. That clear erased enemy hits
+(`loc_BFCC`), so an idle or walking player took no damage and enemies such as
+the stage 3 Bad Brothers swung at the air forever. Tested hidden: boss save
+(first swing hits, loop gone), full GOD-mode run to the ending with no control
+lock, and a real-HP run from stage 2 (reached stage 5; same pit deaths as
+before, no hang).
 
 The first-frame save fix (rerun the stage init on load) is now in
 `game/goldenaxe_spec.c`; the old `WIP-save-fix-level-init.patch` was removed.

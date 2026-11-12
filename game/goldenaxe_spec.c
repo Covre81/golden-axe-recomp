@@ -257,13 +257,10 @@ static void ga_call_vblank(void)
         if (freeze & GA_FREEZE_NONCUTSCENE_BIT)
             m68k_write8(GA_GLOBAL_FREEZE_FLAGS, (uint8_t)(freeze & ~GA_FREEZE_NONCUTSCENE_BIT));
 
-        uint8_t flags3 = m68k_read8(GA_P1_FLAGS3);
-        if (flags3 & GA_FLAGS3_CUTSCENE_RETRIGGER_BIT)
-            m68k_write8(GA_P1_FLAGS3, (uint8_t)(flags3 & ~GA_FLAGS3_CUTSCENE_RETRIGGER_BIT));
-
-        uint8_t flags2 = m68k_read8(GA_P1_BASE + 0x2u);
-        if (flags2 & GA_FLAGS2_ONESHOT_LATCH_BIT)
-            m68k_write8(GA_P1_BASE + 0x2u, (uint8_t)(flags2 & ~GA_FLAGS2_ONESHOT_LATCH_BIT));
+        /* $3 bit 6 / $2 bit 2 are no longer cleared here: bit 6 is the
+         * "got hit" flag that loc_BFCC sets when an enemy swing lands, so
+         * clearing it every idle/walking frame made player 1 immune and left
+         * enemies (e.g. the stage 3 Bad Brothers) swinging forever. */
     }
 }
 

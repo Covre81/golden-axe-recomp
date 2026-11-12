@@ -116,7 +116,15 @@ Testado escondido com os dois saves do Bruno (fase 3, jogador parado, 2.400–3.
 - Esse código veio no projeto original (commit `fd8b7f7`). O comentário dele diz que o bit "aparecia andando, sem NPC por perto" e travava o controle. Muito provavelmente eram golpes de inimigos [PROVÁVEL].
 - Teste: com esse apagamento desligado (só no exe de teste), o primeiro golpe do irmão no save 1 acerta (vida 32→16) e o laço de "golpear o ar" some [CONFIRMADO].
 - Efeito no jogo: o jogador parado ou andando não leva dano, e a IA de alguns inimigos fica repetindo o ataque. Isso explica pelo menos um dos dois chefes travados [PROVÁVEL].
-- Ainda não mexi no código: tirar essa correção pode trazer de volta o travamento de controle que ela escondia. Falta uma partida inteira de teste. Proposta: `patches/proposal-player-hitflag.patch`.
+- **Corrigido no código** (12/11, fim da tarde): o apagamento do bit 6 / bit 2 saiu de `ga_call_vblank` [CONFIRMADO].
+- O Cursor leu o `ga.asm` e concluiu que o "travamento de controle" antigo era causado pela própria correção: ela apagava o bit 2 (trava de um quadro do golpe) e o jogo repetia o começo do "levei golpe" todo quadro [PROVÁVEL].
+- Testes escondidos depois da correção [CONFIRMADO]:
+  - save 1 do Bruno: o irmão acerta no primeiro golpe (vida 32→16), sem laço de golpe no ar;
+  - partida inteira automática (modo deus) até o final do jogo, sem travar o controle (a única "parada" foi na fase 6, igual às partidas antigas, e é o robô de teste que se perde no caminho);
+  - partida com vida de verdade a partir da fase 2: chegou à fase 5. O exe antigo deu game over na fase 3. As mortes por queda no precipício foram nos mesmos quadros nos dois; o jogador agora leva mais golpes (17 contra 9), como no jogo original;
+  - saves (primeiro quadro da fase 2 e meio da fase 1) continuam carregando.
+- Efeito para o Bruno: o jogo fica um pouco mais difícil, igual ao original. Ficar parado agora tira vida.
+- Continua sendo do jogo original [PROVÁVEL]: o irmão no estado `$0C` só sai quando é atacado, e o irmão no estado `$00` não se aproxima se o jogador está em outra "faixa" de profundidade (save 2).
 
 ### Vigia opcional da IA (versão 2, não aplicada)
 
