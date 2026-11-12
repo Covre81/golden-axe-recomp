@@ -30,6 +30,10 @@ goldenaxe-video.ini
 rom.cfg
 debug.ini
 dispatch_misses.log
+*.thumb
+*.replay
+*.gst
+logs/
 
 # Python
 __pycache__/

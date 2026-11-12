@@ -1,0 +1,75 @@
+Audio/pacer frame = real NTSC frame (896040 master, 59.9227 Hz), not 59.94 Hz.
+
+runner/sim_step.c drains the audio chips by GENESIS_SIM_WALL_FRAME_MASTER_CYCLES
+= 895780 master cycles per emulated frame, and main.c paces at 60000/1001 =
+59.94 fps. Hardware NTSC frame is 262 lines x 3420 master = 896040 cycles
+(59.9227 Hz). The Z80 (music tick) and the 68K run the full 262 x 228 / 488
+lines, so each frame's audio comes out 260 master cycles short: 3732 PSG
+samples per frame instead of ~3733.5.
+
+Measured on Golden Axe (2026-11-12, build with the shift-count fix):
+  - recomp --wav: 29,109,600 stereo samples in 7800 frames = exactly 3732.0
+    per frame (the fractional leftover is also dropped each frame,
+    psg_reset_leftover), against 3733.5 on hardware: -0.040%.
+  - That is about -2.9 of the -16.2 frames the audio drifts vs BlastEm over
+    116 s (tools/probe/audio_lag.py). The rest is not this patch.
+Not covered: the 68K cycle budget per frame stays 262 x 488 = 127,856
+(hardware 128,005.7). Separate question, opposite sign.
+Risk: the host pacer now runs at 59.9227 fps (was 59.94); both values move
+together so the audio buffer stays balanced. --target-fps still overrides.
+Test: patches/test_segagenesisrecomp-ntsc-frame-audio.py (static check, plus
+--exe check of samples per frame; fails on the current build).
+Base: segagenesisrecomp f92e278.
+Apply: git -C segagenesisrecomp apply ../patches/segagenesisrecomp-ntsc-frame-audio.patch
+diff --git a/runner/main.c b/runner/main.c
+index a5de210..c4c7f8c 100644
+--- a/runner/main.c
++++ b/runner/main.c
+@@ -3249,10 +3249,13 @@ int main(int argc, char *argv[])
+         fprintf(stderr, "[display] interlace_display=%s\n",
+                 s_interlace_display_mode == INTERLACE_DISPLAY_RAW ? "raw" : "tv");
+     }
+-    /* --target-fps wins over debug.ini, which wins over default 59.94. */
++    /* --target-fps wins over debug.ini, which wins over the default: the real
++     * NTSC frame rate, master 53693175 Hz / (262 x 3420) = 59.9227 fps. Must
++     * match GENESIS_SIM_WALL_FRAME_MASTER_CYCLES (sim_step.c) or the audio
++     * buffer drifts and the DRC has to absorb it. */
+     double target_fps = (target_fps_cli > 0.0)     ? target_fps_cli :
+                         (target_fps_from_ini > 0.0) ? target_fps_from_ini :
+-                                                       (60000.0 / 1001.0);  /* NTSC */
++                                                       (53693175.0 / 896040.0);  /* NTSC */
+     fprintf(stderr, "[pacer] target frame rate: %.4f fps\n", target_fps);
+     int debug_port = debug_port_cli ? debug_port_cli :
+                      (debug_port_from_ini ? debug_port_from_ini :
+diff --git a/runner/sim_step.c b/runner/sim_step.c
+index 5bbef5f..c3d5436 100644
+--- a/runner/sim_step.c
++++ b/runner/sim_step.c
+@@ -12,8 +12,12 @@
+ 
+ /* One NTSC wall frame of master cycles: the audio chips advance this far every
+  * tick whatever the 68K did (see main.c's comment history on why the drain is
+- * the wall frame, not g_audio_cycle_counter). */
+-#define GENESIS_SIM_WALL_FRAME_MASTER_CYCLES 895780u
++ * the wall frame, not g_audio_cycle_counter). Hardware: 262 lines x 3420
++ * master = 896040 (59.9227 Hz, ~3733.5 PSG samples per frame). The old 895780
++ * was the 59.94 Hz host-pacer rate (~3732 samples), so every frame of audio
++ * came out ~0.03% short of the console's. Keep in step with main.c's default
++ * target fps. */
++#define GENESIS_SIM_WALL_FRAME_MASTER_CYCLES 896040u
+ 
+ /* glue.c frame bookkeeping (not in glue.h; main.c historically declared
+  * them at the call site). */
+diff --git a/tests/runtime/sim_step_test.c b/tests/runtime/sim_step_test.c
+index aabece8..fbc7617 100644
+--- a/tests/runtime/sim_step_test.c
++++ b/tests/runtime/sim_step_test.c
+@@ -25,7 +25,7 @@ void machine_run_frame_ex(GenesisScanlineSink sink,void *user,const GenesisScanl
+ {(void)sink;(void)user;(void)producer;CHECK(phase==5);phase=6;state*=3;}
+ void audio_mixer_drain(uint32_t cycles,int16_t *fm,size_t fc,size_t *fn,
+                        int16_t *psg,size_t pc,size_t *pn)
+-{(void)fm;(void)fc;(void)psg;(void)pc;CHECK(phase==6 && cycles==895780);*fn=*pn=0;phase=7;}
++{(void)fm;(void)fc;(void)psg;(void)pc;CHECK(phase==6 && cycles==896040);*fn=*pn=0;phase=7;}
+ void glue_service_vblank(void){CHECK(phase==7);}
+ void glue_end_of_wall_frame(void){CHECK(phase==7);phase=8;}
+ static int stop(void *ctx){(void)ctx;return continue_tick;}

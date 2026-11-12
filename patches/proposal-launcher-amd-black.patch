@@ -1,0 +1,291 @@
+diff --git a/recomp-ui/recomp_ui.cmake b/recomp-ui/recomp_ui.cmake
+index 07a6f5d..82b73de 100644
+--- a/recomp-ui/recomp_ui.cmake
++++ b/recomp-ui/recomp_ui.cmake
+@@ -202,6 +202,7 @@ function(recomp_target_launcher_ui TGT)
+         ${RUI_SRC}/common/launcher_model.c
+         ${_rui_platform_source}
+         ${RUI_SRC}/common/launcher_gl.c
++        ${RUI_SRC}/common/launcher_gl_health.c
+         ${RUI_SRC}/common/launcher_input.c
+         ${RUI_SRC}/common/launcher_files.c
+         ${RUI_SRC}/common/launcher_debug.c
+diff --git a/recomp-ui/src/common/backends/imgui/launcher_imgui.cpp b/recomp-ui/src/common/backends/imgui/launcher_imgui.cpp
+index d82116a..af7de45 100644
+--- a/recomp-ui/src/common/backends/imgui/launcher_imgui.cpp
++++ b/recomp-ui/src/common/backends/imgui/launcher_imgui.cpp
+@@ -15,6 +15,7 @@
+ #include "launcher_backend.h"
+ #include "launcher_boot_timing.h"
+ #include "launcher_gl.h"
++#include "launcher_gl_health.h"
+ #include "launcher_input.h"
+ #include "launcher_files.h"
+ #include "launcher_directory_url.h"
+@@ -268,8 +269,18 @@ bool sdl_has_global_mouse(void) {
+  * scissor rects, which is what turns a logical-sized layout into a
+  * pixel-resolution frame. */
+ void apply_logical_display(const LauncherPlatform* p) {
+-    if (!p || !p->window || p->input_scale == 1.0f) return;
++    if (!p || !p->window) return;
+     if (p->logical_w <= 0 || p->logical_h <= 0) return;
++    /* Windows / X11 synthesize HiDPI without a drawable/window size split, so
++     * input_scale can stay 1.0 while display_scale and pixel_w still differ from
++     * logical size — skipping here leaves FramebufferScale at 1,1 and ImGui
++     * draws into the wrong viewport (often an empty/black frame on AMD). */
++    const bool needs_logical_fixup =
++        p->input_scale != 1.0f ||
++        p->display_scale > 1.001f ||
++        (p->pixel_w > 0 && p->pixel_w != p->logical_w) ||
++        (p->pixel_h > 0 && p->pixel_h != p->logical_h);
++    if (!needs_logical_fixup) return;
+ 
+     ImGuiIO& io = ImGui::GetIO();
+     if (SDL_GetWindowFlags(p->window) & SDL_WINDOW_MINIMIZED) {
+@@ -15302,9 +15313,10 @@ extern "C" LngAction launcher_backend_run(LauncherPlatform* p,
+     // that scale so the path can be exercised on a 100% display; nothing here
+     // reads the env var any more.
+     bool first_present_marked = false;
++    int  gl_health_frames = 0;
+ 
+-    while ((m->action == LNG_ACTION_NONE && !p->should_quit) ||
+-           launch_commit.job.pending() || m->setup_preparing) {
++    while (((m->action == LNG_ACTION_NONE && !p->should_quit) ||
++           launch_commit.job.pending() || m->setup_preparing) && !p->gl_failed) {
+         /* finish() joins before model/provider access, returning the borrowed
+          * ctx to the UI. A queued close wins even when commit succeeded. */
+         const auto completion = launch_commit.finish(launch_commit.close_requested || p->should_quit);
+@@ -15516,6 +15528,12 @@ extern "C" LngAction launcher_backend_run(LauncherPlatform* p,
+             launch_commit.job.start();
+         }
+ 
++        if (p->pixel_w <= 0 || p->pixel_h <= 0) {
++            fprintf(stderr, "[launcher] zero drawable size %dx%d\n",
++                    p->pixel_w, p->pixel_h);
++            p->gl_failed = true;
++            break;
++        }
+         glViewport(0, 0, p->pixel_w, p->pixel_h);
+         const LngColor bg = th->background;
+         glClearColor(bg.r, bg.g, bg.b, bg.a);
+@@ -15531,6 +15549,17 @@ extern "C" LngAction launcher_backend_run(LauncherPlatform* p,
+         // Native pickers can return during draw_ui; start only after its
+         // remaining reads and debug commands have released the provider.
+         launcher_model_start_pending_mod_import(m);
++        if (++gl_health_frames <= 3) {
++            if (launcher_gl_poll_error("after-draw") ||
++                !launcher_gl_frame_has_visible_pixels(p->pixel_w, p->pixel_h)) {
++                if (gl_health_frames >= 3) {
++                    fprintf(stderr, "[launcher] OpenGL frame probe failed after %d frames\n",
++                            gl_health_frames);
++                    p->gl_failed = true;
++                    break;
++                }
++            }
++        }
+         launcher_platform_present(p);
+         if (!launch_commit.job.pending()) card_manager_ui::process_picker();
+         if (card_manager_ui::exit_ready) p->should_quit = true;
+diff --git a/recomp-ui/src/common/launcher_gl_health.c b/recomp-ui/src/common/launcher_gl_health.c
+new file mode 100644
+index 0000000..37d2068
+--- /dev/null
++++ b/recomp-ui/src/common/launcher_gl_health.c
+@@ -0,0 +1,52 @@
++// launcher_gl_health.c — OpenGL sanity checks (software GL, errors, black frame).
++
++#include "launcher_gl_health.h"
++
++#include "launcher_sdlcompat.h"
++
++#include <stdio.h>
++#include <string.h>
++
++static int renderer_is_software_str(const char* r) {
++    if (!r || !r[0]) return 1;
++    if (strstr(r, "GDI Generic")) return 1;
++    if (strstr(r, "Microsoft Generic") || strstr(r, "WARP")) return 1;
++    if (strstr(r, "Software Adapter") || strstr(r, "LLVMpipe")) return 1;
++    return 0;
++}
++
++void launcher_gl_log_info(void) {
++    const char* version = (const char*)glGetString(GL_VERSION);
++    const char* vendor  = (const char*)glGetString(GL_VENDOR);
++    const char* renderer = (const char*)glGetString(GL_RENDERER);
++    fprintf(stderr, "[launcher] GL version=%s vendor=%s renderer=%s\n",
++            version ? version : "(null)",
++            vendor ? vendor : "(null)",
++            renderer ? renderer : "(null)");
++    (void)launcher_gl_poll_error("post-glGetString");
++}
++
++bool launcher_gl_renderer_is_software(void) {
++    const char* renderer = (const char*)glGetString(GL_RENDERER);
++    return renderer_is_software_str(renderer) != 0;
++}
++
++bool launcher_gl_poll_error(const char* tag) {
++    GLenum err = glGetError();
++    if (err == GL_NO_ERROR) return false;
++    fprintf(stderr, "[launcher] glGetError(%s)=0x%x\n", tag ? tag : "?", (unsigned)err);
++    return true;
++}
++
++bool launcher_gl_frame_has_visible_pixels(int pixel_w, int pixel_h) {
++    unsigned char px[4];
++    int x, y;
++    if (pixel_w <= 0 || pixel_h <= 0) return false;
++    x = pixel_w / 2;
++    y = pixel_h / 2;
++    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
++    if (launcher_gl_poll_error("glReadPixels")) return false;
++    /* Background clear is dark blue-grey (~0.04,0.05,0.08); true black swap
++     * failure reads as 0,0,0,0 on many AMD multi-monitor setups. */
++    return px[0] > 4 || px[1] > 4 || px[2] > 4;
++}
+diff --git a/recomp-ui/src/common/launcher_gl_health.h b/recomp-ui/src/common/launcher_gl_health.h
+new file mode 100644
+index 0000000..a8eed8b
+--- /dev/null
++++ b/recomp-ui/src/common/launcher_gl_health.h
+@@ -0,0 +1,29 @@
++// launcher_gl_health.h — lightweight OpenGL sanity checks for the launcher.
++
++#ifndef LAUNCHER_GL_HEALTH_H
++#define LAUNCHER_GL_HEALTH_H
++
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// Log GL_VERSION / GL_VENDOR / GL_RENDERER to stderr. Requires current context.
++void launcher_gl_log_info(void);
++
++// True when the driver is a known software rasterizer (GDI Generic, etc.).
++bool launcher_gl_renderer_is_software(void);
++
++// True when glGetError reports an error after `tag` (also logs the GLenum).
++bool launcher_gl_poll_error(const char* tag);
++
++// After a frame is drawn, sample the framebuffer centre. Returns false when
++// every channel is near zero (likely black-screen failure).
++bool launcher_gl_frame_has_visible_pixels(int pixel_w, int pixel_h);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* LAUNCHER_GL_HEALTH_H */
+diff --git a/recomp-ui/src/common/launcher_ng_capi.c b/recomp-ui/src/common/launcher_ng_capi.c
+index 0d437da..5b62ac3 100644
+--- a/recomp-ui/src/common/launcher_ng_capi.c
++++ b/recomp-ui/src/common/launcher_ng_capi.c
+@@ -223,6 +223,12 @@ int recomp_launcher_run_window(const char* window_title,
+ 
+     LngAction act = launcher_backend_run(&plat, &model, &theme);
+ 
++    if (plat.gl_failed) {
++        launcher_platform_close(&plat);
++        fprintf(stderr, "[launcher] GL unhealthy — treating launcher as unavailable\n");
++        return RECOMP_LAUNCHER_RESULT_UNAVAILABLE;
++    }
++
+     launcher_window_size_save(window_size_path, plat.logical_w, plat.logical_h);
+     launcher_platform_close(&plat);
+     launcher_boot_timing_mark("rui:platform_closed");
+diff --git a/recomp-ui/src/common/launcher_platform.h b/recomp-ui/src/common/launcher_platform.h
+index 6a7bb0c..c224935 100644
+--- a/recomp-ui/src/common/launcher_platform.h
++++ b/recomp-ui/src/common/launcher_platform.h
+@@ -50,6 +50,7 @@ typedef struct LauncherPlatform {
+     bool  scale_changed;   // set for one frame after a DPI/monitor change
+     bool  size_changed;    // set for one frame after a resize
+     bool  should_quit;     // window close requested
++    bool  gl_failed;       // set when GL cannot present usable frames
+ } LauncherPlatform;
+ 
+ // Create the window (RESIZABLE + HIGH_PIXEL_DENSITY) and a GL 3.3 core context.
+diff --git a/recomp-ui/src/common/launcher_platform_sdl2.c b/recomp-ui/src/common/launcher_platform_sdl2.c
+index 6a5f6cd..17e8cfa 100644
+--- a/recomp-ui/src/common/launcher_platform_sdl2.c
++++ b/recomp-ui/src/common/launcher_platform_sdl2.c
+@@ -16,6 +16,7 @@
+ #include "launcher_platform.h"
+ #include "launcher_boot_timing.h"
+ #include "launcher_gl.h"
++#include "launcher_gl_health.h"
+ 
+ #include <stdio.h>
+ #include <string.h>
+@@ -155,7 +156,16 @@ static void fit_window_to_display(LauncherPlatform* p, int logical_w, int logica
+                      want_w < max_w ? want_w : max_w,
+                      want_h < max_h ? want_h : max_h,
+                      frame_t, frame_l, frame_b, frame_r);
+-        SDL_MaximizeWindow(p->window);
++#if defined(_WIN32)
++        /* Spanning virtual desktops (side-by-side monitors, ~2987x724) can leave
++         * AMD GL presenting a black front buffer when maximized across the
++         * whole surface; keep a clamped bordered window instead. */
++        const int skip_maximize = usable.w > 2560 || usable.h < 800;
++#else
++        const int skip_maximize = 0;
++#endif
++        if (!skip_maximize)
++            SDL_MaximizeWindow(p->window);
+     } else {
+         place_window(p->window, &usable, want_w, want_h,
+                      frame_t, frame_l, frame_b, frame_r);
+@@ -275,6 +285,16 @@ bool launcher_platform_open(LauncherPlatform* p, const char* title,
+ 
+     SDL_GL_MakeCurrent(p->window, p->gl);
+     SDL_GL_SetSwapInterval(1);
++    launcher_gl_log_info();
++    if (launcher_gl_renderer_is_software()) {
++        fprintf(stderr, "[launcher] refusing software OpenGL renderer\n");
++        SDL_GL_DeleteContext(p->gl);
++        p->gl = NULL;
++        SDL_DestroyWindow(p->window);
++        p->window = NULL;
++        if (s_quit_sdl) SDL_Quit();
++        return false;
++    }
+ 
+     if (!test_hidden)
+         SDL_RaiseWindow(p->window);   // foreground + keyboard focus (gamepad/kbd nav)
+diff --git a/segagenesisrecomp/runner/main.c b/segagenesisrecomp/runner/main.c
+index a5de210..94f4876 100644
+--- a/segagenesisrecomp/runner/main.c
++++ b/segagenesisrecomp/runner/main.c
+@@ -2746,6 +2746,9 @@ int main(int argc, char *argv[])
+                 snprintf(s_launcher_ctx.initial_rom, sizeof s_launcher_ctx.initial_rom, "%s", initial_rom);
+                 s_launcher_ctx.settings_ini = settings_ini;
+                 s_launcher_ctx.rom_cfg_path = rom_cfg_path;
++                /* Keep SDL initialized between the launcher GL context and the
++                 * game D3D11 renderer to avoid driver teardown glitches. */
++                recomp_launcher_set_preserve_sdl(1);
+                 lr = run_recomp_launcher(ltitle, initial_rom, picked, sizeof picked, &rom_path,
+                                          settings_ini, rom_cfg_path,
+ #if GENESIS_HAS_RECOMP_NET
+@@ -2755,7 +2758,18 @@ int main(int argc, char *argv[])
+ #endif
+                                          0);
+                 if (lr == 1) return 0;   /* user closed the launcher */
+-                /* lr == 2 (unavailable) -> fall through to the native picker. */
++                /* lr == 2 (unavailable): GL/window failure or picker self-test.
++                 * If a cached ROM is already known, boot straight through instead
++                 * of stopping on a black launcher or a second picker. */
++                if (lr == 2 && initial_rom[0]) {
++                    FILE *probe = fopen(initial_rom, "rb");
++                    if (probe) {
++                        fclose(probe);
++                        rom_path = initial_rom;
++                    }
++                }
++                if (lr == 2 && !rom_path)
++                    ; /* fall through to the native picker */
+             }
+         }
+ #else

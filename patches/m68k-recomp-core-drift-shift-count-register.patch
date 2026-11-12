@@ -1,0 +1,35 @@
+Fix cycle_drift_correction: register-count shifts read the wrong register.
+
+In emit_cycle_drift_correction (profiles/genesis/code_generator.c) the count
+register was taken from `w0 & 7`, which is the register being SHIFTED (bits 2-0).
+On the 68000 the count register is in bits 11-9. The correction adds
+2*((Dn & 63) - 4) (real count minus the static average of 4), but with the
+data register's Dn instead of the count's.
+
+Measured on Golden Axe (2026-11-12), no input, from boot:
+  - game mode $10 is reached at frame 1261 (was 1267; without the correction: 1261).
+  - audio lag vs BlastEm has no steps: largest step between 2 s windows 1.2 frames
+    (was 13.8) and the drift over 40 s goes from +16.2 to -3.6 frames.
+  - all 7 register-count shifts in the whole ROM are affected; they sit in the
+    graphics-decompression routines at $30BE-$33AE (loc_30BE, loc_30E6, loc_32C2,
+    loc_337E, loc_33AE), which run with VBlank masked.
+  - [inferred] with random data in Dn, (Dn & 63) averages ~31, i.e. roughly +55
+    cycles of over-charge per executed shift.
+Test: patches/test_m68k-recomp-core-drift-shift-count-register.py (synthetic ROM;
+fails without this patch, passes with it).
+Base: m68k-recomp-core 0890f0d (segagenesisrecomp f92e278).
+Apply: git -C segagenesisrecomp/external/m68k-recomp-core apply ../../../patches/m68k-recomp-core-drift-shift-count-register.patch
+
+diff --git a/profiles/genesis/code_generator.c b/profiles/genesis/code_generator.c
+index 707b81f..d731233 100644
+--- a/profiles/genesis/code_generator.c
++++ b/profiles/genesis/code_generator.c
+@@ -2118,7 +2118,7 @@ static void emit_cycle_drift_correction(FILE *f, const M68KInstr *instr)
+             if (reg_count_mode) {
+                 /* Static policy assumed an average count of 4; the real
+                  * count is Dn masked to 6 bits (68000 shift-count range). */
+-                int dreg = w0 & 7;
++                int dreg = (w0 >> 9) & 7;   /* count register is bits 11-9; bits 2-0 are the register being shifted */
+                 snprintf(corr_buf, sizeof corr_buf,
+                          "(2*((int)(g_cpu.D[%d] & 63u) - 4))", dreg);
+                 corr_expr = corr_buf;
