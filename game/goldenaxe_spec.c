@@ -21,6 +21,7 @@
  *
  */
 #include "game_spec.h"
+#include "game_layout.h"
 #include "genesis_runtime.h"
 #include "goldenaxe_video.h"
 #include "goldenaxe_options.h"
@@ -442,9 +443,30 @@ static uint32_t ga_save_resume_pc(uint8_t game_mode)
     return ga_in_opening_dialog() ? 0x00826Cu : 0u;
 }
 
+/* A state saved while the level mode ($0C) is still inside its init routine
+ * (loc_12DC: art loads, player spawn, fade-in; several frames) cannot resume
+ * at GameLoop: the mode's "initialized" bit 7 of $FFC172 is set before the
+ * init starts, so the rest of it would be skipped (black screen, no player).
+ * The init makes all its blocking calls from its own top level, so the first
+ * return address under GameLoop's ($12E0..$13AE) identifies it.
+ * Note: with MSVC incremental LTCG a rebuild that touches only this file can
+ * keep an old inlined copy of the hooks inside main.c (runner_load_state_file);
+ * after changing a hook, touch runner/main.c or do a clean build.
+ * Limitation: level mode only. The other modes share the weakness and four of
+ * them end their init with a tail-jumped fade this cannot see; the general
+ * fix is engine-side (defer the save until the game is back at GameLoop). */
+static int ga_in_level_init(void)
+{
+    uint32_t ssp = g_game_layout.initial_ssp;
+    if ((g_ram[0xC173] & 0x7Cu) != 0x0Cu || g_cpu.A[7] > ssp - 8u) return 0;
+    uint32_t ret = ga_rd32((ssp - 8u) & 0xFFFFu);
+    return ret > 0x0012DCu && ret <= 0x0013AEu;
+}
+
 static void ga_on_state_loaded(void)
 {
     goldenaxe_video_reset();
+    if (ga_in_level_init()) g_ram[0xC172] &= 0x7Fu;   /* rerun the init */
     if (ga_in_opening_dialog()) g_cpu.A[0] = 0xFFFFD000u;
 }
 

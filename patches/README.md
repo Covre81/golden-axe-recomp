@@ -35,14 +35,6 @@ Experimental, not applied. Changes the NTSC audio frame length from 895780
 to 896040 master cycles (hardware 59.92 Hz). Test:
 `patches/test_segagenesisrecomp-ntsc-frame-audio.py`.
 
-## `WIP-save-fix-level-init.patch`
-
-Does not work yet. Attempt to fix a black screen when a save is taken on the
-first frame of a stage (clears bit 7 of `$FFC172` on load if the CPU was
-inside `loc_12DC`). Hand-editing that bit in the save file does fix it; the
-hook does not appear to run at load time. See
-`notes/fase1-continuacao-2026-11-12.md`.
-
 ## `proposal-boss-ai-watchdog.patch`
 
 Untested, not compiled, not applied. Optional AI watchdog for the stage 3
@@ -58,6 +50,12 @@ virtual desktop). Current workaround: `skip_launcher = 1` under `[launcher]`
 in `settings.ini`, or `--no-launcher`.
 
 ## Already in the tree
+
+The first-frame save fix (rerun the stage init on load) is now in
+`game/goldenaxe_spec.c`; the old `WIP-save-fix-level-init.patch` was removed.
+After changing a hook in that file, touch `segagenesisrecomp/runner/main.c`
+or do a clean build: MSVC incremental LTCG can keep an old inlined copy.
+
 
 `m68k-recomp-core-dma-wait-yield.patch` (and its test) were added in an
 earlier commit. See git history.

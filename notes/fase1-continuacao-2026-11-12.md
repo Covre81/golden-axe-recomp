@@ -87,13 +87,19 @@ O driver salvava `stageN_start.bin` no primeiro quadro de gameplay da fase. Da f
 - Fora do git: `build\game\Release\GoldenAxeRecomp.prefix.exe` (backup), saídas em `C:\tmp\shiftfix_*`, `C:\tmp\realhp*`, `C:\tmp\shiftfix_lag`, `C:\tmp\oldexe` (cópia do exe antigo para teste).
 - Saves bons (exe novo, tirados 600 quadros após o início da fase): `C:\tmp\shiftfix_full2\stage1..8_start.bin`.
 
-## 6. Teste da correção do save (2026-11-12, tarde)
+## 6. Correção do save no primeiro quadro da fase (resolvido em 2026-11-12, tarde)
 
-- A correção proposta (`ga_in_level_init` em `game/goldenaxe_spec.c`) **não funciona** [CONFIRMADO]. Um save feito no primeiro quadro da fase 2 ainda abre com tela preta, mesmo no exe recompilado com o hook.
-- Editar à mão o bit 7 de `$FFC172` no save resolve: o save carrega normal e o personagem anda [CONFIRMADO].
-- Depois do load, o jogo pula `loc_12DC` no primeiro quadro [CONFIRMADO].
-- Por que o hook não age no load ainda não está claro [INFERIDO]. Próximo passo: print de depuração em `ga_on_state_loaded`.
-- Patch guardado (não entra no commit do código): `patches/WIP-save-fix-level-init.patch`. O arquivo `game/goldenaxe_spec.c` continua modificado na árvore de trabalho, sem stage.
+- Problema: um save feito no primeiro quadro da fase 2 (ou de qualquer fase) abria com tela preta [CONFIRMADO]. O jogo marca o modo "fase" como já iniciado (bit 7 de `$FFC172`) antes de terminar de montar a fase; ao carregar, ele pulava a montagem.
+- A ideia do Claude estava certa: no load, se a pilha mostra que o jogo estava dentro da montagem (`loc_12DC`, retorno `$12EC` em `$FFFCF8`), limpar o bit 7 para a montagem rodar de novo [CONFIRMADO].
+- Por que parecia não funcionar: o código novo estava certo, mas o exe continuava rodando a versão **antiga** do gancho [CONFIRMADO]. O MSVC compila com otimização do programa inteiro (LTCG incremental) e copiou para dentro de `main.c` (`runner_load_state_file`) uma cópia antiga de `ga_on_state_loaded`; recompilar só `goldenaxe_spec.c` não atualizava essa cópia. Prova: com um print de depuração só no `goldenaxe_spec.c` nada aparecia; quando `main.c` também foi recompilado, o print apareceu (`A7=00FFFCB8 C172=800C ret=000012EC init=1`) e a fase carregou [CONFIRMADO]. A causa exata dentro do compilador é [PROVÁVEL].
+- Regra prática: depois de mexer em um gancho do `goldenaxe_spec.c`, encoste em `segagenesisrecomp/runner/main.c` (salvar sem mudar) ou faça build limpo. Quem clona do zero não é afetado.
+- Teste (escondido, cópia do exe fora do repo) [CONFIRMADO]:
+  - save do primeiro quadro da fase 2: carrega, personagem aparece e anda (x `00C2`→`012E`);
+  - save do primeiro quadro da fase 1 e save 600 quadros dentro da fase 1: carregam e andam;
+  - save com o bit 7 limpo à mão (controle): igual ao corrigido.
+  - Prints em `C:\Users\covre\ga_savefix_evidence\08_..12_*.png`.
+- Ferramenta: `tools/probe/save_load_check.py`.
+- Limite: só o modo fase (`$0C`). Outros modos têm a mesma fraqueza na teoria; a solução geral seria no motor (adiar o save até o jogo voltar ao GameLoop) [INFERIDO].
 
 ## 7. Chefes travados na fase 3 (Bad Brothers)
 
