@@ -75,8 +75,9 @@ static void ga_call_hblank(void)
 
 /* ---- Player1 scripted-state stale-velocity AND input-lockout fix ----
  *
- * Dispatch entries 14, 16, 18, 19, 21, 22, 24, 26 (loc_8162, loc_7DF4,
- * loc_7E3A, loc_7E94, loc_80F2, loc_8116, loc_8648-family, loc_8238) are
+ * Dispatch entries 14, 16, 18, 19, 21, 22, 24, 26 (loc_8162, loc_7D1A,
+ * loc_7E3A, loc_7E94, loc_80F2, loc_8116, loc_819E, loc_8238; table at
+ * ga.asm loc_6F68) are
  * the "idle / walk-to-NPC-position / dialog-wait / scripted cutscene
  * walk-in" family. Entry 13 (loc_79DE, dash attack) removed 2026-11-12
  * because the ROM keeps its landing momentum on purpose. None of them read
