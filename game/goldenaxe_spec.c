@@ -89,19 +89,23 @@ static void ga_call_hblank(void)
  *    loc_7E94) write a SCRIPTED, non-player value here while active.
  *    loc_B68C (the unconditional per-frame physics integrator) keeps
  *    adding whatever is in $2C(a0) to X every frame regardless of
- *    dispatch state -- a leftover nonzero value here alone produces
- *    "auto-walks right with zero input."
+ *    dispatch state. In entry 0 a leftover $2C cannot persist: with no
+ *    direction held loc_70E0 -> loc_7092 decays it by $8000 per frame
+ *    (also when bit 5 is set, via loc_7028), a wall clears it (loc_C2C2),
+ *    and jump/attack/magic clear it (loc_72F0, loc_8A9E); so $2C is left
+ *    to the ROM.
  *
  * 2. Bit 5 of $3(a0), the terrain-height-transition hold flag (set by
  *    loc_74E0, cleared by loc_750A as part of this same state family's
  *    own normal operation). loc_6FE0 (entry 0's own body) tests this bit FIRST,
  *    before any of its jump/attack/directional-input branches:
  *        btst #5, $3(a0)
- *        bne.s loc_7028      ; skip ALL directional/jump/attack handling
- *    If this bit is still set the instant control hands back to entry 0,
- *    input is *completely* dead -- not just movement, but jump, attack,
- *    and magic too, matching the exact symptom reported ("only pause
- *    works"). This is a better fit for total lockout than (1) alone,
+ *        bne.s loc_7028      ; skip jump/attack/magic (decay still runs)
+ *    Bit 5 blocks jump, attack, magic, and up/down (ga.asm 7707-7708,
+ *    7728-7729). If this bit is still set the instant control hands back
+ *    to entry 0, input is *completely* dead -- not just movement, but jump,
+ *    attack, and magic too, matching the exact symptom reported ("only
+ *    pause works"). This is a better fit for total lockout than (1) alone,
  *    which would only explain movement being wrong.
  *
  * Both (1) and (2) stem from the SAME handoff: whichever of this family's
@@ -112,17 +116,26 @@ static void ga_call_hblank(void)
  * Fix: rather than patch each individual missing clear() one at a time
  * (risking missing others), detect ANY transition where the PREVIOUS
  * frame's dispatch entry was one of this scripted family and the CURRENT
- * frame's entry is 0 (real player control), and clear BOTH $2C(a0) and
- * $3(a0) bit 5 there. Combat/movement states (running, jump, attacks,
- * hit-reaction, etc.) are NOT in this set, so real player-driven momentum
- * or an in-progress terrain hold from actual gameplay is never touched --
- * only entries confirmed (via this doc's disasm reading) to never read
- * input and only ever carry scripted, not player-intended, state. Scoped
- * to Player1 ($FFFFD000) only -- the only address this investigation's
- * live captures ever observed hitting these entries. */
+ * frame's entry is 0 (real player control), and clear $3(a0) bit 5 there
+ * (bit 5 blocks jump, attack, magic, and up/down; that is why the hook
+ * still clears bit 5; $2C(a0) is left to the ROM; see point 1 and the
+ * last paragraph).
+ * Combat/movement states (running, jump, attacks, hit-reaction, etc.) are
+ * NOT in this set, so real player-driven momentum or an in-progress
+ * terrain hold from actual gameplay is never touched -- only entries
+ * confirmed (via this doc's disasm reading) to never read input and only
+ * ever carry scripted, not player-intended, state. Scoped to Player1
+ * ($FFFFD000) only -- the only address this investigation's live captures
+ * ever observed hitting these entries.
+ *
+ * The $2C(a0) clear was removed (2026-11-12) because entry 0 decays $2C
+ * itself every frame with no direction held (loc_70E0 -> loc_7092: +/-$8000
+ * per frame toward 0, cleared on wall contact via loc_C2C2), so a leftover
+ * walk-in value cannot persist (bit 5 or not); zeroing it here desynced
+ * the attract demo and every stage intro vs BlastEm (ROM: $10000 -> $8000 ->
+ * 0, X fraction $80). */
 #define GA_P1_BASE    0x00FFD000u
 #define GA_P1_STATE42 (GA_P1_BASE + 0x42u)
-#define GA_P1_XVEL    (GA_P1_BASE + 0x2Cu)
 #define GA_P1_FLAGS3  (GA_P1_BASE + 0x3u)
 #define GA_FLAGS3_TERRAIN_HOLD_BIT 0x20u
 
@@ -338,10 +351,10 @@ static void ga_call_vblank(void)
 
     uint16_t cur = m68k_read16(GA_P1_STATE42);
     if (ga_is_scripted_noinput_entry(s_prev_p1_state42) && cur == 0x0000u) {
-        m68k_write32(GA_P1_XVEL, 0u);
         uint8_t flags3 = m68k_read8(GA_P1_FLAGS3);
         if (flags3 & GA_FLAGS3_TERRAIN_HOLD_BIT)
-            m68k_write8(GA_P1_FLAGS3, (uint8_t)(flags3 & ~GA_FLAGS3_TERRAIN_HOLD_BIT));
+            m68k_write8(GA_P1_FLAGS3,
+                        (uint8_t)(flags3 & ~GA_FLAGS3_TERRAIN_HOLD_BIT));
     }
     s_prev_p1_state42 = cur;
 

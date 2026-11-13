@@ -11,3 +11,4 @@ Ferramentas da rodada 3b (2026-11-12). Os caminhos estao fixos em `C:\tmp\ga_tes
   - Scripts do recomp: `mkpit7.py`, `mkp2atk.py [idle]`, `mkp2mag.py`, `mkdemo.py`; `cmppit7.py` compara a fase 7. A escrita na RAM no mesmo quadro do `LOAD_STATE` se perde no recomp: escreva tambem no quadro seguinte.
 - No recomp o teste exato usa script de entrada (`mkatk.py`, `mkpit2.py`: `LOAD_STATE` + `HOLD`/`RELEASE` por quadro + `DUMP_RAM`); `cmpatk.py`/`cmppit.py` comparam com o log do BlastEm.
 - Limite do runner: 4096 diretivas por script.
+- Rodada 5: `bot.py blastem demoram` (RAM `$FFC000-$FFFFFF` por leitura do controle durante a demo, `DEMO_N` quadros), `mkdemo2.py A B` (DUMP_RAM por quadro no recomp, ate ~2000 quadros por script) e `cmpdemo.py` (compara as demos alinhando por `$FFC17A`). Ver `notes/bughunt-2026-11-12-r5.md`.

@@ -148,6 +148,17 @@ def rec(tag, p, extra=''):
     lv = E.rd(0xFFFE7C, 4)
     L(tag, 'f', E.frame, 'x', p[0x1C:0x1E].hex(), 'y', p[0x18:0x1A].hex(), 'z', p[0x20:0x22].hex(), 'g24', p[0x24:0x26].hex(), 'st42', p[0x42:0x44].hex(), 'f3', '%02x' % p[3], 'lives', lv.hex(), extra)
 
+if exp == 'demoram':
+    # demonstracao sem entrada: a partir do 1o quadro com modo $10, grava $FFC000-$FFFFFF a cada leitura do controle (DEMO_N quadros)
+    N = int(os.environ.get('DEMO_N', '1300')); t = 0
+    while (E.rd(0xFFC172, 2)[1] & 0x7C) != 0x10:
+        E.step(0); t += 1
+        if t > 8000: L('no demo'); E.close(); sys.exit(1)
+    L('demo mode at padframe', t)
+    f = open(os.path.join(out, 'demo_c000.bin'), 'wb')
+    for i in range(N):
+        f.write(E.rd(0xFFC000, 0x4000)); E.step(0)
+    f.close(); L('end'); E.close(); sys.exit(0)
 if exp == 'demo':
     # demonstracao automatica desde o boot, sem entrada: registra jogador/inimigos (para achar onde a demo diverge)
     t = 0
