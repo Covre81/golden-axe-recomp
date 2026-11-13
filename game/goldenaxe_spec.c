@@ -341,9 +341,13 @@ static void ga_bb_watchdog_tick(void)
         ga_bb_watchdog_one(GA_BB_SLOT_BASE + i * GA_BB_SLOT_STRIDE, &wd[i]);
 }
 
+/* Hook A's memory of the previous frame. Not part of the save state, so
+ * ga_on_state_loaded resets it (load, rewind): a value left over from the
+ * abandoned timeline could fire the bit-5 clear on the first loaded frame. */
+static uint16_t s_prev_p1_state42 = 0xFFFFu;  /* sentinel: no prior frame yet */
+
 static void ga_call_vblank(void)
 {
-    static uint16_t s_prev_p1_state42 = 0xFFFFu;  /* sentinel: no prior frame yet */
 
     GaVdpCommand command = ga_vdp_command_save();
     recomp_call_addr(0x000CF6u);
@@ -571,6 +575,7 @@ static int ga_in_level_init(void)
 static void ga_on_state_loaded(void)
 {
     goldenaxe_video_reset();
+    s_prev_p1_state42 = 0xFFFFu;
     if (ga_in_level_init()) g_ram[0xC172] &= 0x7Fu;   /* rerun the init */
     if (ga_in_opening_dialog()) g_cpu.A[0] = 0xFFFFD000u;
 }

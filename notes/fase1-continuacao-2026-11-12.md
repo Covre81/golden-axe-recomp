@@ -143,3 +143,15 @@ Testado escondido com os dois saves do Bruno (fase 3, jogador parado, 2.400–3.
 - Causa mais provável: retorno cedo da escala HiDPI em `apply_logical_display` (`launcher_imgui.cpp:271`), ou a janela maximizada no desktop de 2987x724 [PROVÁVEL].
 - Contorno atual: `skip_launcher = 1` em `settings.ini` na seção `[launcher]`, ou abrir com `--no-launcher`.
 - Proposta (não aplicada): `patches/proposal-launcher-amd-black.patch`. Em 12/11 à tarde ela foi aplicada só para compilar e **compila sem erro** [CONFIRMADO]; depois foi desfeita. Não dá para testar sem abrir a janela na tela do Bruno, então continua só como patch.
+
+## Revisão de 2026-11-13 (Claude)
+
+- Revisados os commits `d877691`..`4da8f84` (ganchos do `goldenaxe_spec.c`) contra o `ga.asm`: o bit 3 de `$FFC104` só é ligado em `loc_7330` e só é desligado em `loc_8E60` [CONFIRMADO, lido]. Nenhum erro achado nessas correções.
+- Bug achado e corrigido: `s_prev_p1_state42` (memória do Hook A) ficava fora do save e sobrava depois de load/rewind; `ga_on_state_loaded` agora zera [CONFIRMADO, lido; efeito em jogo raro, não reproduzido].
+- Teste novo `tests/test_spec_hooks.py` (5 travas no código-fonte; falha nas versões `0736388`, `d877691`, `bcb65c2` e `4da8f84`, passa agora) [CONFIRMADO]. Não mede comportamento em jogo; isso continua com `tools/probe/blastem_dual`.
+- Testado escondido, cópia do exe fora do repo [CONFIRMADO]:
+  - save/load pela porta de debug no meio da fase 1: x 194 -> anda até 333 -> load volta a 194 -> anda de novo até 333;
+  - widescreen (`video_configure mode=fit`): imagem 398x224, laterais preenchidas, jogador anda, volta a 320x224 com `off`;
+  - rewind: o motor guardou 45 fotos em ~3.650 quadros (`[rewind] shutdown`). Voltar no tempo (F8) **não testado**.
+- **Não testado, precisa de alguém na frente da tela**: remapear controle no launcher, controle de Xbox, tela cheia (F11) e vsync, menus F7 (saves) e F8 (rewind).
+
